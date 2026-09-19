@@ -43,8 +43,8 @@ app.get('/health', (req, res) => res.json({ status: 'healthy' }));
 app.listen(PORT, () => console.log(`Server on port ${PORT}`));
 
 // ============ КОНСТАНТЫ ============
-const REFERRAL_BONUS = 5;
-const MIN_TASK_REWARD = 1;
+const REFERRAL_BONUS = 0.05;
+const MIN_TASK_REWARD = 0.05;
 const MAX_TASK_REWARD = 10;
 const GIFT_COST = 15;
 const MIN_WITHDRAW = 15;
@@ -68,6 +68,15 @@ function escapeHtml(text) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+}
+
+function formatStars(n) {
+    const num = parseFloat(n);
+    if (Number.isNaN(num)) return '0';
+    // Если целое — показываем без десятичных
+    if (Number.isInteger(num)) return String(num);
+    // Иначе — обрезаем лишние нули
+    return num.toFixed(4).replace(/\.?0+$/, '');
 }
 
 async function safeSend(chatId, text, opts = {}) {
@@ -170,7 +179,6 @@ const db = {
         return r.rows[0];
     },
     async createSubmission(taskId, userId, screenshotFileId) {
-        // Лимит pending-заявок
         const pendingCount = await pool.query(
             `SELECT COUNT(*) FROM submissions WHERE user_id = $1 AND status = 'pending'`,
             [userId]
@@ -179,13 +187,11 @@ const db = {
             throw new Error('TOO_MANY_PENDING');
         }
 
-        // Проверка на своё задание
         const ownCheck = await pool.query(`SELECT owner_id FROM tasks WHERE id = $1`, [taskId]);
         if (ownCheck.rowCount > 0 && ownCheck.rows[0].owner_id === userId) {
             throw new Error('OWN_TASK');
         }
 
-        // Проверка на одно и то же фото
         const sameShot = await pool.query(
             `SELECT id FROM submissions WHERE user_id = $1 AND screenshot_file_id = $2`,
             [userId, screenshotFileId]
@@ -194,14 +200,12 @@ const db = {
             throw new Error('SAME_SCREENSHOT');
         }
 
-        // Пending по этому заданию
         const existing = await pool.query(
             `SELECT id FROM submissions WHERE task_id = $1 AND user_id = $2 AND status = 'pending'`,
             [taskId, userId]
         );
         if (existing.rowCount > 0) throw new Error('ALREADY_PENDING');
 
-        // Уже выполнено
         const done = await pool.query(
             `SELECT id FROM task_completions WHERE task_id = $1 AND user_id = $2`,
             [taskId, userId]
@@ -211,7 +215,9 @@ const db = {
         const taskRes = await pool.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
         const task = taskRes.rows[0];
         if (!task || !task.is_active) throw new Error('NOT_FOUND');
-        if (task.total_budget < (task.completed_count + 1) * task.reward) throw new Error('BUDGET_EMPTY');
+        if (parseFloat(task.total_budget) < (task.completed_count + 1) * parseFloat(task.reward)) {
+            throw new Error('BUDGET_EMPTY');
+        }
 
         const r = await pool.query(
             `INSERT INTO submissions (user_id, task_id, screenshot_file_id) VALUES ($1, $2, $3) RETURNING id`,
@@ -252,14 +258,16 @@ const db = {
             const task = taskRes.rows[0];
             if (!task) throw new Error('NOT_FOUND');
             if (!task.is_active) throw new Error('TASK_CLOSED');
-            if (task.total_budget < (task.completed_count + 1) * task.reward) throw new Error('BUDGET_EMPTY');
+            const reward = parseFloat(task.reward);
+            const budget = parseFloat(task.total_budget);
+            if (budget < (task.completed_count + 1) * reward) throw new Error('BUDGET_EMPTY');
 
             await c.query('INSERT INTO task_completions (task_id, user_id) VALUES ($1, $2)', [sub.task_id, sub.user_id]);
             await c.query('UPDATE tasks SET completed_count = completed_count + 1 WHERE id = $1', [sub.task_id]);
-            await c.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [task.reward, sub.user_id]);
+            await c.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [reward, sub.user_id]);
             await c.query(
                 `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-                [sub.user_id, task.reward, 'task_reward', `Награда за @${task.channel_username}`]
+                [sub.user_id, reward, 'task_reward', `Награда за @${task.channel_username}`]
             );
 
             await c.query('COMMIT');
@@ -369,19 +377,20 @@ bot.onText(/^\/cancel(?:@\w+)?$/, async (msg) => {
 });
 
 // ============ /addbalance ============
-bot.onText(/^\/addbalance(?:@\w+)?\s+@?(\w+)\s+(\d+)$/, async (msg, match) => {
+bot.onText(/^\/addbalance(?:@\w+)?\s+@?(\w+)\s+([\d.,]+)$/, async (msg, match) => {
     if (msg.from.id !== ADMIN_ID) return;
     const username = match[1];
-    const amount = parseInt(match[2], 10);
-    if (amount <= 0 || amount > 100000) {
-        return safeSend(msg.chat.id, '❌ Сумма 1–100000.');
+    const amount = parseFloat(match[2].replace(',', '.'));
+    if (Number.isNaN(amount) || amount <= 0 || amount > 100000) {
+        return safeSend(msg.chat.id, '❌ Сумма 0.01–100000.');
     }
+    const amountR = Math.round(amount * 10000) / 10000;
     try {
         const r = await pool.query('SELECT id FROM users WHERE LOWER(username) = LOWER($1)', [username]);
         if (r.rowCount === 0) return safeSend(msg.chat.id, `❌ @${username} не найден.`);
-        await db.updateBalance(r.rows[0].id, amount, 'admin_credit', 'Начисление админом');
-        await safeSend(msg.chat.id, `✅ +${amount}⭐ для @${username}`);
-        await safeSend(r.rows[0].id, `🎁 Вам начислено ${amount}⭐`);
+        await db.updateBalance(r.rows[0].id, amountR, 'admin_credit', 'Начисление админом');
+        await safeSend(msg.chat.id, `✅ +${formatStars(amountR)}⭐ для @${username}`);
+        await safeSend(r.rows[0].id, `🎁 Вам начислено ${formatStars(amountR)}⭐`);
     } catch (e) {
         console.error('/addbalance:', e);
         await safeSend(msg.chat.id, '❌ Ошибка.');
@@ -452,7 +461,7 @@ bot.on('message', async (msg) => {
             const { id: subId, task } = await db.createSubmission(taskId, userId, fileId);
             const user = await db.getUser(userId);
 
-            await safeSend(msg.chat.id, `✅ Скриншот принят!\n⭐ ${task.reward} звёзд поступят после одобрения администратором.\n⏳ Обычно до 24 часов.`);
+            await safeSend(msg.chat.id, `✅ Скриншот принят!\n⭐ ${formatStars(task.reward)} звёзд поступят после одобрения администратором.\n⏳ Обычно до 24 часов.`);
 
             try {
                 await bot.sendPhoto(ADMIN_ID, fileId, {
@@ -461,8 +470,8 @@ bot.on('message', async (msg) => {
                         `👤 ${escapeHtml(user.first_name || '')} (@${escapeHtml(user.username || 'нет')})\n` +
                         `🆔 <code>${userId}</code>\n` +
                         `📺 @${escapeHtml(task.channel_username)}\n` +
-                        `⭐ Награда: ${task.reward}\n` +
-                        `📊 Осталось: ${Math.floor(task.total_budget / task.reward) - task.completed_count}`
+                        `⭐ Награда: ${formatStars(task.reward)}\n` +
+                        `📊 Осталось: ${Math.floor(parseFloat(task.total_budget) / parseFloat(task.reward)) - task.completed_count}`
                     ).slice(0, 1000),
                     parse_mode: 'HTML',
                     reply_markup: {
@@ -554,9 +563,12 @@ async function handleEarnCommand(chatId, userId, page = 0) {
         const num = page * TASKS_PAGE_SIZE + i + 1;
         const chan = t.channel_username.replace(/^@/, '');
         const isPending = pending.has(t.id);
+        const reward = parseFloat(t.reward);
+        const budget = parseFloat(t.total_budget);
+        const maxC = Math.floor(budget / reward);
 
         message += `${num}. @${t.channel_username}\n`;
-        message += `⭐ ${t.reward} звёзд | 📊 ${t.completed_count}/${Math.floor(t.total_budget / t.reward)}\n`;
+        message += `⭐ ${formatStars(reward)} звёзд | 📊 ${t.completed_count}/${maxC}\n`;
         if (isPending) message += `⏳ На проверке\n`;
         message += `\n`;
 
@@ -582,9 +594,9 @@ async function handleAdvertiseCommand(chatId, userId) {
     const user = await db.getUser(userId);
     const message =
         `📢 Создание задания\n\n` +
-        `⭐ Баланс: ${user.balance} звёзд\n\n` +
+        `⭐ Баланс: ${formatStars(user.balance)} звёзд\n\n` +
         `📝 Отправьте: <code>создать @канал награда бюджет</code>\n` +
-        `📋 Пример: <code>создать @example 2 100</code>\n\n` +
+        `📋 Пример: <code>создать @example 0.05 5</code>\n\n` +
         `⚖️ Награда: ${MIN_TASK_REWARD}–${MAX_TASK_REWARD} звёзд\n` +
         `💡 Пополнение — напишите админу.`;
     await safeSend(chatId, message, { parse_mode: 'HTML' });
@@ -595,7 +607,7 @@ async function handleCabinetCommand(chatId, user) {
     const message =
         `👤 Личный кабинет\n\n` +
         `🆔 ID: <code>${user.id}</code>\n` +
-        `⭐ Баланс: <b>${user.balance}</b>\n` +
+        `⭐ Баланс: <b>${formatStars(user.balance)}</b>\n` +
         `👥 Рефералов: <b>${user.referral_count}</b>\n` +
         `📅 Регистрация: ${new Date(user.created_at).toLocaleDateString('ru-RU')}\n\n` +
         `🔗 Ссылка:\n<code>${link}</code>`;
@@ -612,15 +624,20 @@ async function handleCreateTask(msg) {
             return safeSend(chatId, '❌ Формат: <code>создать @канал награда бюджет</code>', { parse_mode: 'HTML' });
         }
         const channel = parts[1].replace(/^@/, '');
-        const reward = parseInt(parts[2], 10);
-        const budget = parseInt(parts[3], 10);
+        const reward = parseFloat(parts[2].replace(',', '.'));
+        const budget = parseFloat(parts[3].replace(',', '.'));
 
         if (!CHANNEL_REGEX.test(channel)) return safeSend(chatId, '❌ Некорректное имя канала.');
-        if (isNaN(reward) || isNaN(budget)) return safeSend(chatId, '❌ Награда и бюджет — числа.');
+        if (isNaN(reward) || isNaN(budget) || reward <= 0 || budget <= 0) {
+            return safeSend(chatId, '❌ Награда и бюджет — положительные числа.');
+        }
         if (reward < MIN_TASK_REWARD || reward > MAX_TASK_REWARD) {
-            return safeSend(chatId, `❌ Награда: ${MIN_TASK_REWARD}–${MAX_TASK_REWARD}.`);
+            return safeSend(chatId, `❌ Награда: ${MIN_TASK_REWARD}–${MAX_TASK_REWARD}⭐.`);
         }
         if (budget < reward) return safeSend(chatId, '❌ Бюджет < награды.');
+
+        const rewardR = Math.round(reward * 10000) / 10000;
+        const budgetR = Math.round(budget * 10000) / 10000;
 
         const c = await pool.connect();
         let task;
@@ -628,21 +645,21 @@ async function handleCreateTask(msg) {
             await c.query('BEGIN');
             const deduct = await c.query(
                 `UPDATE users SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING balance`,
-                [budget, userId]
+                [budgetR, userId]
             );
             if (deduct.rowCount === 0) {
                 await c.query('ROLLBACK');
-                return safeSend(chatId, `❌ Недостаточно звёзд. Нужно: ${budget}.`);
+                return safeSend(chatId, `❌ Недостаточно звёзд. Нужно: ${formatStars(budgetR)}.`);
             }
             const ins = await c.query(
                 `INSERT INTO tasks (owner_id, channel_username, reward, total_budget)
                  VALUES ($1, $2, $3, $4) RETURNING *`,
-                [userId, channel, reward, budget]
+                [userId, channel, rewardR, budgetR]
             );
             task = ins.rows[0];
             await c.query(
                 `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-                [userId, -budget, 'task_payment', `Задание для @${channel}`]
+                [userId, -budgetR, 'task_payment', `Задание для @${channel}`]
             );
             await c.query('COMMIT');
         } catch (e) {
@@ -655,8 +672,8 @@ async function handleCreateTask(msg) {
 
         await safeSend(chatId,
             `✅ Задание создано!\n\n` +
-            `📺 @${channel}\n⭐ ${reward} звёзд за подписку\n` +
-            `💰 Бюджет: ${budget}\n👥 Макс: ${Math.floor(budget / reward)}`
+            `📺 @${channel}\n⭐ ${formatStars(rewardR)} звёзд за подписку\n` +
+            `💰 Бюджет: ${formatStars(budgetR)}\n👥 Макс: ${Math.floor(budgetR / rewardR)}`
         );
     } catch (e) {
         console.error('handleCreateTask:', e);
@@ -690,10 +707,10 @@ async function handleWithdrawRequest(chatId, userId) {
             awaitingWithdraw.delete(userId);
             return safeSend(chatId, 'Начните с /start');
         }
-        if (user.balance < MIN_WITHDRAW) {
+        if (parseFloat(user.balance) < MIN_WITHDRAW) {
             await client.query('ROLLBACK');
             awaitingWithdraw.delete(userId);
-            return safeSend(chatId, `❌ Нужно ${MIN_WITHDRAW}⭐ (у тебя ${user.balance}).`);
+            return safeSend(chatId, `❌ Нужно ${MIN_WITHDRAW}⭐ (у тебя ${formatStars(user.balance)}).`);
         }
         const pending = await client.query(
             `SELECT id FROM withdraw_requests WHERE user_id = $1 AND status = 'pending' LIMIT 1`,
@@ -783,7 +800,7 @@ async function handleUsernameInput(msg, userId, ts) {
                 `👤 ${escapeHtml(user.first_name || '')} (@${escapeHtml(user.username || 'нет')})\n` +
                 `📮 Куда: ${escapeHtml(text)}\n` +
                 `🎁 Мишка (15⭐) | ⭐ -${GIFT_COST}\n` +
-                `💳 Остаток: ${deduct.rows[0].balance}`,
+                `💳 Остаток: ${formatStars(deduct.rows[0].balance)}`,
                 {
                     parse_mode: 'HTML',
                     reply_markup: {
@@ -891,7 +908,7 @@ async function handleApproveSubmission(cb, subId, answer) {
         const { task, submission } = await db.approveSubmission(subId);
         try {
             await bot.sendMessage(submission.user_id,
-                `🎉 Задание @${task.channel_username} одобрено!\n⭐ +${task.reward} звёзд на баланс.`
+                `🎉 Задание @${task.channel_username} одобрено!\n⭐ +${formatStars(task.reward)} звёзд на баланс.`
             );
         } catch (e) {}
         try {
@@ -971,7 +988,7 @@ async function handleAdminPending(cb, offset, answer) {
                         caption: (
                             `#${s.id} | @${escapeHtml(s.channel_username)}\n` +
                             `👤 ${escapeHtml(s.first_name || '')} (@${escapeHtml(s.username || 'нет')})\n` +
-                            `⭐ ${s.reward}`
+                            `⭐ ${formatStars(s.reward)}`
                         ).slice(0, 1000),
                         reply_markup: {
                             inline_keyboard: [[
@@ -1085,8 +1102,8 @@ async function handleReferral(chatId, userId) {
         `👥 Реферальная система\n\n` +
         `🔗 Ссылка:\n<code>${link}</code>\n\n` +
         `📊 Приглашено: <b>${user.referral_count}</b>\n` +
-        `⭐ Заработано: <b>${user.referral_count * REFERRAL_BONUS}</b>\n\n` +
-        `💡 ${REFERRAL_BONUS} звёзд за друга`;
+        `⭐ Заработано: <b>${formatStars(user.referral_count * REFERRAL_BONUS)}</b>\n\n` +
+        `💡 ${formatStars(REFERRAL_BONUS)} звёзд за друга`;
     await safeSend(chatId, message, { parse_mode: 'HTML' });
 }
 
@@ -1096,9 +1113,11 @@ async function handleMyTasks(chatId, userId) {
     let message = '📋 Ваши задания:\n\n';
     const shown = tasks.slice(0, 15);
     shown.forEach((t, i) => {
-        const maxC = Math.floor(t.total_budget / t.reward);
+        const reward = parseFloat(t.reward);
+        const budget = parseFloat(t.total_budget);
+        const maxC = Math.floor(budget / reward);
         message += `${i + 1}. @${t.channel_username}\n`;
-        message += `${t.is_active ? '🟢' : '🔴'} ⭐${t.reward} | ${t.completed_count}/${maxC}\n\n`;
+        message += `${t.is_active ? '🟢' : '🔴'} ⭐${formatStars(reward)} | ${t.completed_count}/${maxC}\n\n`;
     });
     if (tasks.length > 15) message += `\n... и ещё ${tasks.length - 15} заданий\n`;
     await safeSend(chatId, trimIfLong(message));
@@ -1113,7 +1132,7 @@ async function handleTransactions(chatId, userId) {
     let message = '📊 Последние 10 операций:\n\n';
     r.rows.forEach(tx => {
         const date = new Date(tx.created_at).toLocaleDateString('ru-RU');
-        const amt = tx.amount > 0 ? `+${tx.amount}` : `${tx.amount}`;
+        const amt = tx.amount > 0 ? `+${formatStars(tx.amount)}` : `${formatStars(tx.amount)}`;
         const emoji = tx.amount > 0 ? '💚' : '🔴';
         message += `${emoji} ${amt}⭐ | ${date}\n${tx.description}\n\n`;
     });
@@ -1144,7 +1163,7 @@ async function createTablesIfNotExist() {
                 id BIGINT PRIMARY KEY,
                 username VARCHAR(255),
                 first_name VARCHAR(255),
-                balance INTEGER DEFAULT 0,
+                balance NUMERIC(12,4) DEFAULT 0,
                 referral_count INTEGER DEFAULT 0,
                 referred_by BIGINT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1153,8 +1172,8 @@ async function createTablesIfNotExist() {
                 id SERIAL PRIMARY KEY,
                 owner_id BIGINT NOT NULL,
                 channel_username VARCHAR(255) NOT NULL,
-                reward INTEGER NOT NULL CHECK (reward >= 1 AND reward <= 10),
-                total_budget INTEGER NOT NULL,
+                reward NUMERIC(10,4) NOT NULL CHECK (reward >= 0.05 AND reward <= 10),
+                total_budget NUMERIC(12,4) NOT NULL,
                 completed_count INTEGER DEFAULT 0,
                 is_active BOOLEAN DEFAULT true,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1188,7 +1207,7 @@ async function createTablesIfNotExist() {
             CREATE TABLE IF NOT EXISTS transactions (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
-                amount INTEGER NOT NULL,
+                amount NUMERIC(12,4) NOT NULL,
                 type VARCHAR(50) NOT NULL,
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1236,29 +1255,6 @@ async function createTablesIfNotExist() {
         CREATE INDEX IF NOT EXISTS idx_submissions_user_task ON submissions(user_id, task_id);
     `);
     console.log('✅ Таблица submissions готова');
-
-    // Миграция CHECK constraint
-    try {
-        const constraintCheck = await pool.query(`
-            SELECT pg_get_constraintdef(c.oid) AS def
-            FROM pg_constraint c
-            JOIN pg_class t ON c.conrelid = t.oid
-            WHERE t.relname = 'tasks' AND c.conname = 'tasks_reward_check'
-        `);
-        if (constraintCheck.rowCount > 0) {
-            const def = constraintCheck.rows[0].def;
-            if (def.includes('15') && def.includes('50')) {
-                console.log('🔄 Миграция CHECK constraint...');
-                await pool.query(`UPDATE tasks SET reward = 10 WHERE reward > 10`);
-                await pool.query(`UPDATE tasks SET reward = 1 WHERE reward < 1`);
-                await pool.query(`ALTER TABLE tasks DROP CONSTRAINT tasks_reward_check`);
-                await pool.query(`ALTER TABLE tasks ADD CONSTRAINT tasks_reward_check CHECK (reward >= 1 AND reward <= 10)`);
-                console.log('✅ Constraint обновлён');
-            }
-        }
-    } catch (e) {
-        console.error('⚠️ Миграция constraint:', e.message);
-    }
 }
 
 // ============ ОШИБКИ ============
