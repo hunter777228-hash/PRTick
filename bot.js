@@ -1095,6 +1095,7 @@ bot.on('callback_query', async (cb) => {
     if (!msg || !msg.chat) { try { await bot.answerCallbackQuery(cb.id); } catch (e) {} return; }
     const chatId = msg.chat.id;
     const userId = cb.from.id;
+
     let answered = false;
     const answer = async (opts = {}) => {
         if (answered) return;
@@ -1103,84 +1104,106 @@ bot.on('callback_query', async (cb) => {
     };
 
     try {
-        if (action.startsWith('tasks_page_')) { await handleEarnCommand(chatId, userId, parseInt(action.slice(11), 10) || 0); await answer(); }
-        else if (action === 'refresh_tasks') { await handleEarnCommand(chatId, userId, 0); await answer(); }
-        else if (action === 'referral') { await handleReferral(chatId, userId); await answer(); }
-        else if (action === 'my_tasks') { await handleMyTasks(chatId, userId); await answer(); }
-        else if (action === 'transactions') { await handleTransactions(chatId, userId); await answer(); }
-        else if (action === 'crypto_deposit') { await handleCryptoDeposit(chatId, userId); await answer(); }
-        else if (action.startsWith('crypto_buy_')) { const amount = parseFloat(action.slice(11)); await answer(); await sendCryptoInvoice(chatId, userId, amount); }
-        else if (action === 'withdraw_gift') { await answer(); await handleWithdrawRequest(chatId, userId); }
-        else if (action.startsWith('send_screenshot_')) {
+        if (action.startsWith('tasks_page_')) {
+            await handleEarnCommand(chatId, userId, parseInt(action.slice(11), 10) || 0);
+            await answer();
+        } else if (action === 'refresh_tasks') {
+            await handleEarnCommand(chatId, userId, 0);
+            await answer();
+        } else if (action === 'referral') {
+            await handleReferral(chatId, userId);
+            await answer();
+        } else if (action === 'my_tasks') {
+            await handleMyTasks(chatId, userId);
+            await answer();
+        } else if (action === 'transactions') {
+            await handleTransactions(chatId, userId);
+            await answer();
+        } else if (action === 'crypto_deposit') {
+            await handleCryptoDeposit(chatId, userId);
+            await answer();
+        } else if (action === 'crypto_custom') {
+            awaitingCryptoAmount.set(userId, Date.now());
+            await safeSend(chatId,
+                `✏️ <b>Своя сумма</b>\n\n` +
+                `Введи сумму в USDT (от ${CRYPTO_MIN_AMOUNT} до ${CRYPTO_MAX_AMOUNT}).\n` +
+                `Пример: <code>0.5</code>\n\n` +
+                `💡 1 USDT = ${USDT_TO_STARS} звёзд\n` +
+                `❌ Отмена — /cancel`,
+                { parse_mode: 'HTML' }
+            );
+            await answer();
+        } else if (action.startsWith('crypto_buy_')) {
+            const amount = parseFloat(action.slice(11));
+            await answer();
+            await sendCryptoInvoice(chatId, userId, amount);
+        } else if (action === 'withdraw_gift') {
+            await answer();
+            await handleWithdrawRequest(chatId, userId);
+        } else if (action.startsWith('send_screenshot_')) {
             const taskId = parseInt(action.slice(16), 10);
             if (!Number.isInteger(taskId) || taskId <= 0) return answer({ text: 'Неверное задание' });
             const existing = awaitingScreenshot.get(userId);
-            if (existing && Date.now() - existing.ts < SCREENSHOT_TIMEOUT_MS && existing.taskId !== taskId) return answer({ text: '⚠️ Сначала отправь скриншот или /cancel' });
+            if (existing && Date.now() - existing.ts < SCREENSHOT_TIMEOUT_MS && existing.taskId !== taskId) {
+                return answer({ text: '⚠️ Сначала отправь скриншот или /cancel' });
+            }
             awaitingScreenshot.set(userId, { taskId, ts: Date.now() });
             await safeSend(chatId, `📸 Отправь скриншот.\n⏱ 10 минут. Отмена — /cancel`);
             await answer();
-        }
-        else if (action === 'noop') { await answer({ text: 'Уже на проверке' }); }
-        else if (action.startsWith('approve_')) { await handleApproveSubmission(cb, parseInt(action.slice(8), 10), answer); }
-        else if (action.startsWith('reject_')) { await handleRejectSubmission(cb, parseInt(action.slice(7), 10), answer); }
-        else if (action.startsWith('admin_accept_')) { await handleAdminAccept(cb, parseInt(action.slice(13), 10), answer); }
-        else if (action.startsWith('admin_reject_')) { await handleAdminReject(cb, parseInt(action.slice(13), 10), answer); }
-        else if (action.startsWith('admin_pending_')) { await handleAdminPending(cb, parseInt(action.slice(14), 10) || 0, answer); }
-        else if (action.startsWith('admin_tasks_')) { await handleAdminTasks(cb, parseInt(action.slice(12), 10) || 0, answer); }
-        else if (action.startsWith('admin_task_toggle_')) { const p = action.split('_'); await handleAdminTaskToggle(cb, parseInt(p[3], 10), parseInt(p[4], 10), answer); }
-        else if (action.startsWith('admin_task_delete_confirm_')) { const p = action.split('_'); await handleAdminTaskDeleteConfirm(cb, parseInt(p[4], 10), parseInt(p[5], 10), answer); }
-        else if (action.startsWith('admin_task_delete_')) { const p = action.split('_'); await handleAdminTaskDelete(cb, parseInt(p[3], 10), parseInt(p[4], 10), answer); }
-        else if (action.startsWith('admin_users_')) { await handleAdminUsers(cb, parseInt(action.slice(12), 10) || 0, answer); }
-        else if (action.startsWith('admin_withdrawals_')) { await handleAdminWithdrawals(cb, parseInt(action.slice(18), 10) || 0, answer); }
-        else if (action === 'admin_broadcast') { await handleAdminBroadcast(cb, answer); }
-        else if (action === 'admin_refresh') {
+        } else if (action === 'noop') {
+            await answer({ text: 'Уже на проверке' });
+        } else if (action.startsWith('approve_')) {
+            await handleApproveSubmission(cb, parseInt(action.slice(8), 10), answer);
+        } else if (action.startsWith('reject_')) {
+            await handleRejectSubmission(cb, parseInt(action.slice(7), 10), answer);
+        } else if (action.startsWith('admin_accept_')) {
+            await handleAdminAccept(cb, parseInt(action.slice(13), 10), answer);
+        } else if (action.startsWith('admin_reject_')) {
+            await handleAdminReject(cb, parseInt(action.slice(13), 10), answer);
+        } else if (action.startsWith('admin_pending_')) {
+            await handleAdminPending(cb, parseInt(action.slice(14), 10) || 0, answer);
+        } else if (action.startsWith('admin_tasks_')) {
+            await handleAdminTasks(cb, parseInt(action.slice(12), 10) || 0, answer);
+        } else if (action.startsWith('admin_task_toggle_')) {
+            const p = action.split('_');
+            await handleAdminTaskToggle(cb, parseInt(p[3], 10), parseInt(p[4], 10), answer);
+        } else if (action.startsWith('admin_task_delete_confirm_')) {
+            const p = action.split('_');
+            await handleAdminTaskDeleteConfirm(cb, parseInt(p[4], 10), parseInt(p[5], 10), answer);
+        } else if (action.startsWith('admin_task_delete_')) {
+            const p = action.split('_');
+            await handleAdminTaskDelete(cb, parseInt(p[3], 10), parseInt(p[4], 10), answer);
+        } else if (action.startsWith('admin_users_')) {
+            await handleAdminUsers(cb, parseInt(action.slice(12), 10) || 0, answer);
+        } else if (action.startsWith('admin_withdrawals_')) {
+            await handleAdminWithdrawals(cb, parseInt(action.slice(18), 10) || 0, answer);
+        } else if (action === 'admin_broadcast') {
+            await handleAdminBroadcast(cb, answer);
+        } else if (action === 'admin_refresh') {
             await answer();
             try {
                 const d = await buildAdminPanelData();
-                await bot.editMessageText(buildAdminPanelText(d), { chat_id: cb.message.chat.id, message_id: cb.message.message_id, parse_mode: 'HTML', reply_markup: buildAdminPanelKeyboard(d) });
+                await bot.editMessageText(buildAdminPanelText(d), {
+                    chat_id: cb.message.chat.id,
+                    message_id: cb.message.message_id,
+                    parse_mode: 'HTML',
+                    reply_markup: buildAdminPanelKeyboard(d),
+                });
             } catch (e) {
                 const d = await buildAdminPanelData();
-                await safeSend(cb.message.chat.id, buildAdminPanelText(d), { parse_mode: 'HTML', reply_markup: buildAdminPanelKeyboard(d) });
+                await safeSend(cb.message.chat.id, buildAdminPanelText(d), {
+                    parse_mode: 'HTML',
+                    reply_markup: buildAdminPanelKeyboard(d),
+                });
             }
+        } else {
+            await answer();
         }
-        else { await answer(); }
-    } catch (e) { console.error('callback:', e); await answer({ text: 'Ошибка' }); }
+    } catch (e) {
+        console.error('callback:', e);
+        await answer({ text: 'Ошибка' });
+    }
 });
-
-async function handleReferral(chatId, userId) {
-    const user = await db.getUser(userId);
-    const link = `https://t.me/${BOT_USERNAME}?start=_${user.id}`;
-    await safeSend(chatId,
-        `👥 Реферальная система\n\n🔗 <code>${link}</code>\n\n📊 Приглашено: <b>${user.referral_count}</b>\n⭐ Заработано: <b>${formatStars(user.referral_count * REFERRAL_BONUS)}</b>\n\n💡 ${formatStars(REFERRAL_BONUS)} звёзд за друга`,
-        { parse_mode: 'HTML' }
-    );
-}
-
-async function handleMyTasks(chatId, userId) {
-    const tasks = await db.getUserTasks(userId);
-    if (!tasks.length) return safeSend(chatId, '📋 Нет заданий.');
-    let message = '📋 Ваши задания:\n\n';
-    tasks.slice(0, 15).forEach((t, i) => {
-        const reward = parseFloat(t.reward);
-        const budget = parseFloat(t.total_budget);
-        const maxC = Math.floor(budget / reward);
-        message += `${i + 1}. @${t.channel_username}\n${t.is_active ? '🟢' : '🔴'} ⭐${formatStars(reward)} | ${t.completed_count}/${maxC}\n\n`;
-    });
-    if (tasks.length > 15) message += `\n... и ещё ${tasks.length - 15}\n`;
-    await safeSend(chatId, trimIfLong(message));
-}
-
-async function handleTransactions(chatId, userId) {
-    const r = await pool.query(`SELECT * FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10`, [userId]);
-    if (!r.rows.length) return safeSend(chatId, '📊 Пусто.');
-    let message = '📊 Последние 10:\n\n';
-    r.rows.forEach(tx => {
-        const date = new Date(tx.created_at).toLocaleDateString('ru-RU');
-        const amt = tx.amount > 0 ? `+${formatStars(tx.amount)}` : formatStars(tx.amount);
-        message += `${tx.amount > 0 ? '💚' : '🔴'} ${amt}⭐ | ${date}\n${tx.description}\n\n`;
-    });
-    await safeSend(chatId, trimIfLong(message));
-}
 
 // ============ БД ============
 async function initDatabase() {
