@@ -126,6 +126,7 @@ app.post('/crypto/webhook', express.raw({ type: 'application/json' }), async (re
 app.listen(PORT, () => console.log(`Server on port ${PORT}`));
 
 // ============ КОНСТАНТЫ ============
+// ============ КОНСТАНТЫ ============
 const REFERRAL_BONUS = 0.05;
 const MIN_TASK_REWARD = 0.05;
 const MAX_TASK_REWARD = 10;
@@ -142,9 +143,12 @@ const ADMIN_TASKS_PAGE = 5;
 const ADMIN_USERS_PAGE = 10;
 const USDT_TO_STARS = 45;
 const CRYPTO_PACKAGES = [1, 5, 10, 25, 50];
+const CRYPTO_MIN_AMOUNT = 0.1;
+const CRYPTO_MAX_AMOUNT = 1000;
 
 const awaitingWithdraw = new Map();
 const awaitingScreenshot = new Map();
+const awaitingCryptoAmount = new Map();
 const broadcastState = new Map();
 const broadcastRunning = new Set();
 
