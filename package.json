@@ -8,7 +8,7 @@
     "dev": "nodemon bot.js"
   },
   "dependencies": {
-    "crypto-bot-api": "^2.2.7",
+    "crypto-bot-api": "^0.3.6",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "node-telegram-bot-api": "^0.66.0",
