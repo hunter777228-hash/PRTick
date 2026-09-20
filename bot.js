@@ -4,7 +4,6 @@ const { Pool } = require('pg');
 const express = require('express');
 const nodeCrypto = require('crypto');
 const CryptoBotAPI = require('crypto-bot-api');
-const ChatHandler = require('./chat-handler');
 
 // ============ ВАЛИДАЦИЯ ENV ============
 const ADMIN_ID = parseInt(process.env.ADMIN_ID, 10);
@@ -32,7 +31,6 @@ const pool = new Pool({
 
 // ============ БОТ ============
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-const chatHandler = new ChatHandler(bot);
 let BOT_USERNAME = null;
 let BOT_ID = null;
 
@@ -40,7 +38,7 @@ let BOT_ID = null;
 let cryptoClient = null;
 if (process.env.CRYPTO_PAY_TOKEN) {
     try {
-        cryptoClient = new CryptoBotAPI(process.env.CRYPTO_PAY_TOKEN, 'mainnet');
+        cryptoClient = new CryptoBotAPI(process.env.CRYPTO_PAY_TOKEN);
         console.log('✅ CryptoBot клиент создан');
     } catch (e) {
         console.error('❌ CryptoBot init:', e.message);
@@ -50,7 +48,6 @@ if (process.env.CRYPTO_PAY_TOKEN) {
 }
 
 // ============ EXPRESS ============
-// ⚠️ ВАЖНО: express.json() НЕ ДОЛЖЕН быть глобально! Вебхук CryptoBot требует raw body.
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -60,14 +57,8 @@ app.get('/health', (req, res) => res.json({ status: 'healthy' }));
 // ===== Webhook от CryptoBot =====
 app.post('/crypto/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     try {
-        if (!process.env.CRYPTO_PAY_TOKEN) {
-            console.error('❌ CRYPTO_PAY_TOKEN не задан');
-            return res.sendStatus(500);
-        }
-        if (!Buffer.isBuffer(req.body)) {
-            console.error('❌ req.body не Buffer — express.json() мешает');
-            return res.sendStatus(500);
-        }
+        if (!process.env.CRYPTO_PAY_TOKEN) return res.sendStatus(500);
+        if (!Buffer.isBuffer(req.body)) return res.sendStatus(500);
 
         const signature = req.headers['crypto-pay-api-signature'];
         if (!signature) return res.sendStatus(403);
@@ -92,10 +83,7 @@ app.post('/crypto/webhook', express.raw({ type: 'application/json' }), async (re
 
             const userId = parseInt(parts[1], 10);
             const usdt = parseFloat(parts[2]);
-
-            if (!Number.isInteger(userId) || !Number.isFinite(usdt) || usdt <= 0) {
-                return res.sendStatus(200);
-            }
+            if (!Number.isInteger(userId) || !Number.isFinite(usdt) || usdt <= 0) return res.sendStatus(200);
 
             const starsToCredit = Math.round(usdt * USDT_TO_STARS * 10000) / 10000;
 
@@ -109,35 +97,23 @@ app.post('/crypto/webhook', express.raw({ type: 'application/json' }), async (re
                 );
                 if (insert.rowCount === 0) {
                     await c.query('ROLLBACK');
-                    console.log('Дубликат:', payload);
                     return res.sendStatus(200);
                 }
                 await c.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [starsToCredit, userId]);
                 await c.query(
                     `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-                    [userId, starsToCredit, 'crypto_deposit', `Пополнение ${usdt} USDT (${payload})`]
+                    [userId, starsToCredit, 'crypto_deposit', `Пополнение ${usdt} USDT`]
                 );
                 await c.query('COMMIT');
                 ok = true;
             } catch (e) {
                 await c.query('ROLLBACK').catch(() => {});
                 console.error('crypto credit:', e);
-            } finally {
-                c.release();
-            }
+            } finally { c.release(); }
 
             if (ok) {
-                try {
-                    await bot.sendMessage(userId,
-                        `✅ Баланс пополнен!\n\n💵 ${usdt} USDT\n⭐ +${formatStars(starsToCredit)} звёзд`
-                    );
-                } catch (e) {}
-                try {
-                    await bot.sendMessage(ADMIN_ID,
-                        `💰 Крипто-пополнение\n👤 <code>${userId}</code>\n💵 ${usdt} USDT → ${formatStars(starsToCredit)}⭐`,
-                        { parse_mode: 'HTML' }
-                    );
-                } catch (e) {}
+                try { await bot.sendMessage(userId, `✅ Баланс пополнен!\n💵 ${usdt} USDT\n⭐ +${formatStars(starsToCredit)} звёзд`); } catch (e) {}
+                try { await bot.sendMessage(ADMIN_ID, `💰 Крипто-пополнение\n👤 <code>${userId}</code>\n💵 ${usdt} USDT → ${formatStars(starsToCredit)}⭐`, { parse_mode: 'HTML' }); } catch (e) {}
             }
         }
         res.sendStatus(200);
@@ -174,11 +150,7 @@ const broadcastRunning = new Set();
 
 // ============ ХЕЛПЕРЫ ============
 function escapeHtml(text) {
-    return String(text ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+    return String(text ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function formatStars(n) {
@@ -189,12 +161,8 @@ function formatStars(n) {
 }
 
 async function safeSend(chatId, text, opts = {}) {
-    try {
-        return await bot.sendMessage(chatId, text, opts);
-    } catch (e) {
-        console.error(`safeSend to ${chatId}:`, e.message);
-        return null;
-    }
+    try { return await bot.sendMessage(chatId, text, opts); }
+    catch (e) { console.error(`safeSend to ${chatId}:`, e.message); return null; }
 }
 
 function trimIfLong(text) {
@@ -216,11 +184,8 @@ const db = {
             const isNew = existing.rowCount === 0;
 
             const r = await client.query(
-                `INSERT INTO users (id, username, first_name, referred_by)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (id) DO UPDATE
-                   SET username = EXCLUDED.username,
-                       first_name = EXCLUDED.first_name
+                `INSERT INTO users (id, username, first_name, referred_by) VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (id) DO UPDATE SET username = EXCLUDED.username, first_name = EXCLUDED.first_name
                  RETURNING *`,
                 [userId, username, firstName, referredBy]
             );
@@ -228,14 +193,8 @@ const db = {
             if (referredBy && isNew) {
                 const refExists = await client.query('SELECT id FROM users WHERE id = $1', [referredBy]);
                 if (refExists.rowCount > 0) {
-                    await client.query(
-                        `UPDATE users SET balance = balance + $1, referral_count = referral_count + 1 WHERE id = $2`,
-                        [REFERRAL_BONUS, referredBy]
-                    );
-                    await client.query(
-                        `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-                        [referredBy, REFERRAL_BONUS, 'referral_bonus', `Бонус за ${username || userId}`]
-                    );
+                    await client.query(`UPDATE users SET balance = balance + $1, referral_count = referral_count + 1 WHERE id = $2`, [REFERRAL_BONUS, referredBy]);
+                    await client.query(`INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`, [referredBy, REFERRAL_BONUS, 'referral_bonus', `Бонус`]);
                 }
             }
             await client.query('COMMIT');
@@ -243,103 +202,63 @@ const db = {
         } catch (e) {
             await client.query('ROLLBACK').catch(() => {});
             throw e;
-        } finally {
-            client.release();
-        }
+        } finally { client.release(); }
     },
     async updateBalance(userId, amount, type, description) {
         const c = await pool.connect();
         try {
             await c.query('BEGIN');
             await c.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [amount, userId]);
-            await c.query(
-                `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-                [userId, amount, type, description]
-            );
+            await c.query(`INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`, [userId, amount, type, description]);
             await c.query('COMMIT');
         } catch (e) {
             await c.query('ROLLBACK').catch(() => {});
             throw e;
-        } finally {
-            c.release();
-        }
+        } finally { c.release(); }
     },
     async getActiveTasks(excludeUserId = null, limit = 100) {
-        let query = `SELECT t.*, u.username as owner_username FROM tasks t
-                     JOIN users u ON t.owner_id = u.id
-                     WHERE t.is_active = true
-                       AND t.reward > 0
-                       AND t.total_budget >= (t.completed_count + 1) * t.reward`;
+        let query = `SELECT t.*, u.username as owner_username FROM tasks t JOIN users u ON t.owner_id = u.id
+                     WHERE t.is_active = true AND t.reward > 0 AND t.total_budget >= (t.completed_count + 1) * t.reward`;
         const params = [];
-        if (excludeUserId) {
-            query += ' AND t.owner_id != $1';
-            params.push(excludeUserId);
-        }
+        if (excludeUserId) { query += ' AND t.owner_id != $1'; params.push(excludeUserId); }
         query += ' ORDER BY t.created_at DESC LIMIT $' + (params.length + 1);
         params.push(limit);
         const r = await pool.query(query, params);
         return r.rows;
     },
     async createSubmission(taskId, userId, screenshotFileId) {
-        const pendingCount = await pool.query(
-            `SELECT COUNT(*) FROM submissions WHERE user_id = $1 AND status = 'pending'`,
-            [userId]
-        );
-        if (parseInt(pendingCount.rows[0].count, 10) >= MAX_PENDING_SUBMISSIONS) {
-            throw new Error('TOO_MANY_PENDING');
-        }
+        const pendingCount = await pool.query(`SELECT COUNT(*) FROM submissions WHERE user_id = $1 AND status = 'pending'`, [userId]);
+        if (parseInt(pendingCount.rows[0].count, 10) >= MAX_PENDING_SUBMISSIONS) throw new Error('TOO_MANY_PENDING');
+
         const ownCheck = await pool.query(`SELECT owner_id FROM tasks WHERE id = $1`, [taskId]);
         if (ownCheck.rowCount > 0 && ownCheck.rows[0].owner_id === userId) throw new Error('OWN_TASK');
 
-        const sameShot = await pool.query(
-            `SELECT id FROM submissions WHERE user_id = $1 AND screenshot_file_id = $2`,
-            [userId, screenshotFileId]
-        );
+        const sameShot = await pool.query(`SELECT id FROM submissions WHERE user_id = $1 AND screenshot_file_id = $2`, [userId, screenshotFileId]);
         if (sameShot.rowCount > 0) throw new Error('SAME_SCREENSHOT');
 
-        const existing = await pool.query(
-            `SELECT id FROM submissions WHERE task_id = $1 AND user_id = $2 AND status = 'pending'`,
-            [taskId, userId]
-        );
+        const existing = await pool.query(`SELECT id FROM submissions WHERE task_id = $1 AND user_id = $2 AND status = 'pending'`, [taskId, userId]);
         if (existing.rowCount > 0) throw new Error('ALREADY_PENDING');
 
-        const done = await pool.query(
-            `SELECT id FROM task_completions WHERE task_id = $1 AND user_id = $2`,
-            [taskId, userId]
-        );
+        const done = await pool.query(`SELECT id FROM task_completions WHERE task_id = $1 AND user_id = $2`, [taskId, userId]);
         if (done.rowCount > 0) throw new Error('ALREADY_DONE');
 
         const taskRes = await pool.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
         const task = taskRes.rows[0];
         if (!task || !task.is_active) throw new Error('NOT_FOUND');
-        if (parseFloat(task.total_budget) < (task.completed_count + 1) * parseFloat(task.reward)) {
-            throw new Error('BUDGET_EMPTY');
-        }
+        if (parseFloat(task.total_budget) < (task.completed_count + 1) * parseFloat(task.reward)) throw new Error('BUDGET_EMPTY');
 
-        const r = await pool.query(
-            `INSERT INTO submissions (user_id, task_id, screenshot_file_id) VALUES ($1, $2, $3) RETURNING id`,
-            [userId, taskId, screenshotFileId]
-        );
+        const r = await pool.query(`INSERT INTO submissions (user_id, task_id, screenshot_file_id) VALUES ($1, $2, $3) RETURNING id`, [userId, taskId, screenshotFileId]);
         return { id: r.rows[0].id, task };
     },
     async approveSubmission(submissionId) {
         const c = await pool.connect();
         try {
             await c.query('BEGIN');
-            const check = await c.query(
-                `SELECT screenshot_file_id FROM submissions WHERE id = $1 AND status = 'pending'`,
-                [submissionId]
-            );
+            const check = await c.query(`SELECT screenshot_file_id FROM submissions WHERE id = $1 AND status = 'pending'`, [submissionId]);
             if (check.rowCount === 0) { await c.query('ROLLBACK'); throw new Error('NOT_FOUND'); }
-            if (!check.rows[0].screenshot_file_id || check.rows[0].screenshot_file_id.length < 10) {
-                await c.query('ROLLBACK'); throw new Error('NO_SCREENSHOT');
-            }
+            if (!check.rows[0].screenshot_file_id || check.rows[0].screenshot_file_id.length < 10) { await c.query('ROLLBACK'); throw new Error('NO_SCREENSHOT'); }
 
-            const upd = await c.query(
-                `UPDATE submissions SET status = 'approved', processed_at = NOW()
-                 WHERE id = $1 AND status = 'pending' RETURNING *`,
-                [submissionId]
-            );
+            const upd = await c.query(`UPDATE submissions SET status = 'approved', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *`, [submissionId]);
             if (upd.rowCount === 0) { await c.query('ROLLBACK'); throw new Error('ALREADY_DONE'); }
             const sub = upd.rows[0];
 
@@ -354,10 +273,7 @@ const db = {
             await c.query('INSERT INTO task_completions (task_id, user_id) VALUES ($1, $2)', [sub.task_id, sub.user_id]);
             await c.query('UPDATE tasks SET completed_count = completed_count + 1 WHERE id = $1', [sub.task_id]);
             await c.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [reward, sub.user_id]);
-            await c.query(
-                `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-                [sub.user_id, reward, 'task_reward', `Награда за @${task.channel_username}`]
-            );
+            await c.query(`INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`, [sub.user_id, reward, 'task_reward', `Награда за @${task.channel_username}`]);
             await c.query('COMMIT');
             return { task, submission: sub };
         } catch (e) {
@@ -366,11 +282,7 @@ const db = {
         } finally { c.release(); }
     },
     async rejectSubmission(submissionId, reason) {
-        const r = await pool.query(
-            `UPDATE submissions SET status = 'rejected', reject_reason = $1, processed_at = NOW()
-             WHERE id = $1 AND status = 'pending' RETURNING *`,
-            [submissionId, reason]
-        );
+        const r = await pool.query(`UPDATE submissions SET status = 'rejected', reject_reason = $1, processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *`, [submissionId, reason]);
         if (r.rowCount === 0) throw new Error('ALREADY_DONE');
         return r.rows[0];
     },
@@ -383,10 +295,7 @@ const db = {
 // ============ КЛАВИАТУРЫ ============
 const mainKeyboard = {
     reply_markup: {
-        keyboard: [
-            [{ text: '💰 Заработать' }, { text: '📢 Рекламировать' }],
-            [{ text: '👤 Мой кабинет' }],
-        ],
+        keyboard: [[{ text: '💰 Заработать' }, { text: '📢 Рекламировать' }], [{ text: '👤 Мой кабинет' }]],
         resize_keyboard: true,
     },
 };
@@ -412,7 +321,7 @@ bot.onText(/^\/start(?:@\w+)?(?:\s+(.+))?$/, async (msg, match) => {
     if (awaitingWithdraw.has(userId)) awaitingWithdraw.delete(userId);
     if (awaitingScreenshot.has(userId)) awaitingScreenshot.delete(userId);
     if (broadcastState.has(userId)) broadcastState.delete(userId);
-    if (broadcastRunning.has(userId)) broadcastRunning.delete(userId); // ✅ ФИКС
+    if (broadcastRunning.has(userId)) broadcastRunning.delete(userId);
 
     try {
         let user = await db.getUser(userId);
@@ -425,21 +334,13 @@ bot.onText(/^\/start(?:@\w+)?(?:\s+(.+))?$/, async (msg, match) => {
             }
             user = await db.createUser(userId, msg.from.username, msg.from.first_name, referredBy);
             await safeSend(chatId,
-                `🎉 Добро пожаловать в Tick Bot!\n\n` +
-                `⭐ Зарабатывайте звёзды за подписки\n` +
-                `📸 Отправляйте скриншот — админ проверит\n` +
-                `🎁 Выводите от ${MIN_WITHDRAW} звёзд подарком\n` +
-                `💳 Пополняйте через крипту\n\n` +
-                `Выберите действие:`,
+                `🎉 Добро пожаловать!\n\n⭐ Зарабатывайте звёзды\n📸 Отправляйте скриншот\n🎁 Выводите от ${MIN_WITHDRAW}⭐\n💳 Пополняйте криптой\n\nВыберите действие:`,
                 mainKeyboard
             );
         } else {
             await safeSend(chatId, `👋 С возвращением, ${escapeHtml(msg.from.first_name)}!`, mainKeyboard);
         }
-    } catch (e) {
-        console.error('/start:', e);
-        await safeSend(chatId, '❌ Ошибка. Попробуйте позже.');
-    }
+    } catch (e) { console.error('/start:', e); await safeSend(chatId, '❌ Ошибка.'); }
 });
 
 // ============ /cancel ============
@@ -447,12 +348,10 @@ bot.onText(/^\/cancel(?:@\w+)?$/, async (msg) => {
     if (msg.chat.type !== 'private') return;
     const userId = msg.from.id;
     let cancelled = false;
-
     if (awaitingWithdraw.has(userId)) { awaitingWithdraw.delete(userId); cancelled = true; }
     if (awaitingScreenshot.has(userId)) { awaitingScreenshot.delete(userId); cancelled = true; }
     if (broadcastState.has(userId)) { broadcastState.delete(userId); cancelled = true; }
     if (broadcastRunning.has(userId)) { broadcastRunning.delete(userId); cancelled = true; }
-
     await safeSend(msg.chat.id, cancelled ? '❌ Отменено.' : 'Нечего отменять.');
 });
 
@@ -461,9 +360,7 @@ bot.onText(/^\/addbalance(?:@\w+)?\s+@?(\w+)\s+([\d.,]+)$/, async (msg, match) =
     if (msg.from.id !== ADMIN_ID) return;
     const username = match[1];
     const amount = parseFloat(match[2].replace(',', '.'));
-    if (Number.isNaN(amount) || amount <= 0 || amount > 100000) {
-        return safeSend(msg.chat.id, '❌ Сумма 0.01–100000.');
-    }
+    if (Number.isNaN(amount) || amount <= 0 || amount > 100000) return safeSend(msg.chat.id, '❌ Сумма 0.01–100000.');
     const amountR = Math.round(amount * 10000) / 10000;
     try {
         const r = await pool.query('SELECT id FROM users WHERE LOWER(username) = LOWER($1)', [username]);
@@ -471,12 +368,8 @@ bot.onText(/^\/addbalance(?:@\w+)?\s+@?(\w+)\s+([\d.,]+)$/, async (msg, match) =
         await db.updateBalance(r.rows[0].id, amountR, 'admin_credit', 'Начисление админом');
         await safeSend(msg.chat.id, `✅ +${formatStars(amountR)}⭐ для @${username}`);
         await safeSend(r.rows[0].id, `🎁 Вам начислено ${formatStars(amountR)}⭐`);
-    } catch (e) {
-        console.error('/addbalance:', e);
-        await safeSend(msg.chat.id, '❌ Ошибка.');
-    }
+    } catch (e) { console.error('/addbalance:', e); await safeSend(msg.chat.id, '❌ Ошибка.'); }
 });
-
 // ============ АДМИН-ПАНЕЛЬ ============
 async function buildAdminPanelData() {
     const users = await pool.query('SELECT COUNT(*) FROM users');
@@ -485,7 +378,6 @@ async function buildAdminPanelData() {
     const pending = await pool.query(`SELECT COUNT(*) FROM submissions WHERE status = 'pending'`);
     const pendingWithdraw = await pool.query(`SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'`);
     const totalStars = await pool.query(`SELECT COALESCE(SUM(balance), 0) AS sum FROM users`);
-
     return {
         users: users.rows[0].count,
         activeTasks: activeTasks.rows[0].count,
@@ -497,12 +389,11 @@ async function buildAdminPanelData() {
 }
 
 function buildAdminPanelText(d) {
-    return `👑 <b>Админ-панель</b>\n\n` +
-        `📊 <b>Статистика:</b>\n` +
+    return `👑 <b>Админ-панель</b>\n\n📊 <b>Статистика:</b>\n` +
         `• Юзеров: <b>${d.users}</b>\n` +
         `• Баланс юзеров: <b>${formatStars(d.totalStars)}⭐</b>\n` +
         `• Заданий: <b>${d.allTasks}</b> (активных: ${d.activeTasks})\n` +
-        `• Скриншотов на проверке: <b>${d.pending}</b>\n` +
+        `• Скриншотов: <b>${d.pending}</b>\n` +
         `• Заявок на вывод: <b>${d.pendingWithdraw}</b>`;
 }
 
@@ -517,9 +408,7 @@ function buildAdminPanelKeyboard(d) {
                 { text: `📋 Задания`, callback_data: 'admin_tasks_0' },
                 { text: `👥 Юзеры`, callback_data: 'admin_users_0' },
             ],
-            [
-                { text: `📢 Рассылка`, callback_data: 'admin_broadcast' },
-            ],
+            [{ text: `📢 Рассылка`, callback_data: 'admin_broadcast' }],
         ],
     };
 }
@@ -528,14 +417,8 @@ bot.onText(/^\/admin(?:@\w+)?$/, async (msg) => {
     if (msg.from.id !== ADMIN_ID) return;
     try {
         const d = await buildAdminPanelData();
-        await safeSend(msg.chat.id, buildAdminPanelText(d), {
-            parse_mode: 'HTML',
-            reply_markup: buildAdminPanelKeyboard(d),
-        });
-    } catch (e) {
-        console.error('/admin:', e);
-        await safeSend(msg.chat.id, '❌ Ошибка.');
-    }
+        await safeSend(msg.chat.id, buildAdminPanelText(d), { parse_mode: 'HTML', reply_markup: buildAdminPanelKeyboard(d) });
+    } catch (e) { console.error('/admin:', e); await safeSend(msg.chat.id, '❌ Ошибка.'); }
 });
 
 // ============ ГЛАВНЫЙ ОБРАБОТЧИК ============
@@ -549,17 +432,12 @@ bot.on('message', async (msg) => {
 
     let fileId = null;
     if (msg.photo && msg.photo.length) fileId = msg.photo[msg.photo.length - 1].file_id;
-    else if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('image/')) {
-        fileId = msg.document.file_id;
-    }
+    else if (msg.document && msg.document.mime_type && msg.document.mime_type.startsWith('image/')) fileId = msg.document.file_id;
 
     if (fileId) {
         const state = awaitingScreenshot.get(userId);
         if (!state) return;
-        if (Date.now() - state.ts > SCREENSHOT_TIMEOUT_MS) {
-            awaitingScreenshot.delete(userId);
-            return safeSend(msg.chat.id, '⌛ Время истекло.');
-        }
+        if (Date.now() - state.ts > SCREENSHOT_TIMEOUT_MS) { awaitingScreenshot.delete(userId); return safeSend(msg.chat.id, '⌛ Время истекло.'); }
         if (fileId.length < 10) return safeSend(msg.chat.id, '❌ Не удалось получить файл.');
 
         awaitingScreenshot.delete(userId);
@@ -568,25 +446,15 @@ bot.on('message', async (msg) => {
         try {
             const { id: subId, task } = await db.createSubmission(taskId, userId, fileId);
             const user = await db.getUser(userId);
-
-            await safeSend(msg.chat.id, `✅ Скриншот принят!\n⭐ ${formatStars(task.reward)} звёзд после одобрения.\n⏳ До 24 часов.`);
-
+            await safeSend(msg.chat.id, `✅ Скриншот принят!\n⭐ ${formatStars(task.reward)} звёзд после одобрения.`);
             try {
                 await bot.sendPhoto(ADMIN_ID, fileId, {
-                    caption: (
-                        `📸 <b>Заявка #${subId}</b>\n\n` +
-                        `👤 ${escapeHtml(user.first_name || '')} (@${escapeHtml(user.username || 'нет')})\n` +
-                        `🆔 <code>${userId}</code>\n` +
-                        `📺 @${escapeHtml(task.channel_username)}\n` +
-                        `⭐ ${formatStars(task.reward)}`
-                    ).slice(0, 1000),
+                    caption: `📸 <b>Заявка #${subId}</b>\n👤 ${escapeHtml(user.first_name || '')} (@${escapeHtml(user.username || 'нет')})\n📺 @${escapeHtml(task.channel_username)}\n⭐ ${formatStars(task.reward)}`,
                     parse_mode: 'HTML',
-                    reply_markup: {
-                        inline_keyboard: [[
-                            { text: '✅ Принять', callback_data: `approve_${subId}` },
-                            { text: '❌ Отклонить', callback_data: `reject_${subId}` },
-                        ]],
-                    },
+                    reply_markup: { inline_keyboard: [[
+                        { text: '✅ Принять', callback_data: `approve_${subId}` },
+                        { text: '❌ Отклонить', callback_data: `reject_${subId}` },
+                    ]] },
                 });
             } catch (e) { console.error('notify admin:', e.message); }
         } catch (e) {
@@ -629,10 +497,7 @@ bot.on('message', async (msg) => {
 
         if (text.startsWith('создать ')) return handleCreateTask(msg);
         await safeSend(msg.chat.id, 'Используйте кнопки меню.', mainKeyboard);
-    } catch (e) {
-        console.error('message:', e);
-        await safeSend(msg.chat.id, '❌ Ошибка.');
-    }
+    } catch (e) { console.error('message:', e); await safeSend(msg.chat.id, '❌ Ошибка.'); }
 });
 
 // ============ ЗАРАБОТОК ============
@@ -641,16 +506,9 @@ async function handleEarnCommand(chatId, userId, page = 0) {
     if (!tasks.length) return safeSend(chatId, '😔 Нет доступных заданий.');
 
     const taskIds = tasks.map(t => t.id);
-    const completedRes = await pool.query(
-        `SELECT task_id FROM task_completions WHERE user_id = $1 AND task_id = ANY($2::int[])`,
-        [userId, taskIds]
-    );
+    const completedRes = await pool.query(`SELECT task_id FROM task_completions WHERE user_id = $1 AND task_id = ANY($2::int[])`, [userId, taskIds]);
     const completed = new Set(completedRes.rows.map(r => r.task_id));
-
-    const pendingRes = await pool.query(
-        `SELECT task_id FROM submissions WHERE user_id = $1 AND status = 'pending' AND task_id = ANY($2::int[])`,
-        [userId, taskIds]
-    );
+    const pendingRes = await pool.query(`SELECT task_id FROM submissions WHERE user_id = $1 AND status = 'pending' AND task_id = ANY($2::int[])`, [userId, taskIds]);
     const pending = new Set(pendingRes.rows.map(r => r.task_id));
 
     const available = tasks.filter(t => !completed.has(t.id));
@@ -673,17 +531,13 @@ async function handleEarnCommand(chatId, userId, page = 0) {
         const budget = parseFloat(t.total_budget);
         const maxC = Math.floor(budget / reward);
 
-        message += `${num}. @${t.channel_username}\n`;
-        message += `⭐ ${formatStars(reward)} звёзд | 📊 ${t.completed_count}/${maxC}\n`;
+        message += `${num}. @${t.channel_username}\n⭐ ${formatStars(reward)} звёзд | 📊 ${t.completed_count}/${maxC}\n`;
         if (isPending) message += `⏳ На проверке\n`;
         message += `\n`;
 
         keyboard.push([{ text: `🔗 Подписаться на @${chan}`, url: `https://t.me/${chan}` }]);
-        if (!isPending) {
-            keyboard.push([{ text: `📸 Отправить скриншот (${num})`, callback_data: `send_screenshot_${t.id}` }]);
-        } else {
-            keyboard.push([{ text: `⏳ На проверке (${num})`, callback_data: 'noop' }]);
-        }
+        if (!isPending) keyboard.push([{ text: `📸 Отправить скриншот (${num})`, callback_data: `send_screenshot_${t.id}` }]);
+        else keyboard.push([{ text: `⏳ На проверке (${num})`, callback_data: 'noop' }]);
     }
 
     const nav = [];
@@ -697,25 +551,13 @@ async function handleEarnCommand(chatId, userId, page = 0) {
 
 async function handleAdvertiseCommand(chatId, userId) {
     const user = await db.getUser(userId);
-    const message =
-        `📢 Создание задания\n\n` +
-        `⭐ Баланс: ${formatStars(user.balance)} звёзд\n\n` +
-        `📝 Отправьте: <code>создать @канал награда бюджет</code>\n` +
-        `📋 Пример: <code>создать @example 0.05 5</code>\n\n` +
-        `⚖️ Награда: ${MIN_TASK_REWARD}–${MAX_TASK_REWARD} звёзд\n` +
-        `💡 Пополнение — в кабинете`;
+    const message = `📢 Создание задания\n\n⭐ Баланс: ${formatStars(user.balance)} звёзд\n\n📝 Отправьте: <code>создать @канал награда бюджет</code>\n📋 Пример: <code>создать @example 0.05 5</code>\n\n⚖️ Награда: ${MIN_TASK_REWARD}–${MAX_TASK_REWARD} звёзд`;
     await safeSend(chatId, message, { parse_mode: 'HTML' });
 }
 
 async function handleCabinetCommand(chatId, user) {
     const link = `https://t.me/${BOT_USERNAME}?start=_${user.id}`;
-    const message =
-        `👤 Личный кабинет\n\n` +
-        `🆔 ID: <code>${user.id}</code>\n` +
-        `⭐ Баланс: <b>${formatStars(user.balance)}</b>\n` +
-        `👥 Рефералов: <b>${user.referral_count}</b>\n` +
-        `📅 Регистрация: ${new Date(user.created_at).toLocaleDateString('ru-RU')}\n\n` +
-        `🔗 Ссылка:\n<code>${link}</code>`;
+    const message = `👤 Личный кабинет\n\n🆔 ID: <code>${user.id}</code>\n⭐ Баланс: <b>${formatStars(user.balance)}</b>\n👥 Рефералов: <b>${user.referral_count}</b>\n📅 Регистрация: ${new Date(user.created_at).toLocaleDateString('ru-RU')}\n\n🔗 Ссылка:\n<code>${link}</code>`;
     await safeSend(chatId, message, { parse_mode: 'HTML', ...cabinetKeyboard });
 }
 
@@ -732,12 +574,8 @@ async function handleCreateTask(msg) {
         const budget = parseFloat(parts[3].replace(',', '.'));
 
         if (!CHANNEL_REGEX.test(channel)) return safeSend(chatId, '❌ Некорректное имя канала.');
-        if (isNaN(reward) || isNaN(budget) || reward <= 0 || budget <= 0) {
-            return safeSend(chatId, '❌ Награда и бюджет — положительные числа.');
-        }
-        if (reward < MIN_TASK_REWARD || reward > MAX_TASK_REWARD) {
-            return safeSend(chatId, `❌ Награда: ${MIN_TASK_REWARD}–${MAX_TASK_REWARD}⭐.`);
-        }
+        if (isNaN(reward) || isNaN(budget) || reward <= 0 || budget <= 0) return safeSend(chatId, '❌ Награда и бюджет — числа.');
+        if (reward < MIN_TASK_REWARD || reward > MAX_TASK_REWARD) return safeSend(chatId, `❌ Награда: ${MIN_TASK_REWARD}–${MAX_TASK_REWARD}⭐.`);
         if (budget < reward) return safeSend(chatId, '❌ Бюджет < награды.');
 
         const rewardR = Math.round(reward * 10000) / 10000;
@@ -746,39 +584,19 @@ async function handleCreateTask(msg) {
         const c = await pool.connect();
         try {
             await c.query('BEGIN');
-            const deduct = await c.query(
-                `UPDATE users SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING balance`,
-                [budgetR, userId]
-            );
-            if (deduct.rowCount === 0) {
-                await c.query('ROLLBACK');
-                return safeSend(chatId, `❌ Недостаточно звёзд. Нужно: ${formatStars(budgetR)}.`);
-            }
-            await c.query(
-                `INSERT INTO tasks (owner_id, channel_username, reward, total_budget) VALUES ($1, $2, $3, $4)`,
-                [userId, channel, rewardR, budgetR]
-            );
-            await c.query(
-                `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-                [userId, -budgetR, 'task_payment', `Задание для @${channel}`]
-            );
+            const deduct = await c.query(`UPDATE users SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING balance`, [budgetR, userId]);
+            if (deduct.rowCount === 0) { await c.query('ROLLBACK'); return safeSend(chatId, `❌ Недостаточно звёзд. Нужно: ${formatStars(budgetR)}.`); }
+            await c.query(`INSERT INTO tasks (owner_id, channel_username, reward, total_budget) VALUES ($1, $2, $3, $4)`, [userId, channel, rewardR, budgetR]);
+            await c.query(`INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`, [userId, -budgetR, 'task_payment', `Задание для @${channel}`]);
             await c.query('COMMIT');
         } catch (e) {
             await c.query('ROLLBACK').catch(() => {});
             console.error('createTask:', e);
             return safeSend(chatId, '❌ Ошибка при создании задания.');
-        } finally {
-            c.release();
-        }
+        } finally { c.release(); }
 
-        await safeSend(chatId,
-            `✅ Задание создано!\n\n📺 @${channel}\n⭐ ${formatStars(rewardR)} за подписку\n` +
-            `💰 Бюджет: ${formatStars(budgetR)}\n👥 Макс: ${Math.floor(budgetR / rewardR)}`
-        );
-    } catch (e) {
-        console.error('handleCreateTask:', e);
-        await safeSend(chatId, '❌ Ошибка.');
-    }
+        await safeSend(chatId, `✅ Задание создано!\n\n📺 @${channel}\n⭐ ${formatStars(rewardR)} за подписку\n💰 Бюджет: ${formatStars(budgetR)}\n👥 Макс: ${Math.floor(budgetR / rewardR)}`);
+    } catch (e) { console.error('handleCreateTask:', e); await safeSend(chatId, '❌ Ошибка.'); }
 }
 
 // ============ ВЫВОД ============
@@ -788,9 +606,7 @@ async function handleWithdrawRequest(chatId, userId) {
         if (now - st.ts > WITHDRAW_TIMEOUT_MS) awaitingWithdraw.delete(uid);
     }
     const existing = awaitingWithdraw.get(userId);
-    if (existing && now - existing.ts < WITHDRAW_TIMEOUT_MS) {
-        return safeSend(chatId, '⏳ Ты уже в процессе. Введи @username или /cancel.');
-    }
+    if (existing && now - existing.ts < WITHDRAW_TIMEOUT_MS) return safeSend(chatId, '⏳ Ты уже в процессе.');
 
     const ts = Date.now();
     awaitingWithdraw.set(userId, { ts, promptSent: false });
@@ -802,46 +618,27 @@ async function handleWithdrawRequest(chatId, userId) {
         const userRes = await client.query('SELECT * FROM users WHERE id = $1 FOR UPDATE', [userId]);
         const user = userRes.rows[0];
         if (!user) { await client.query('ROLLBACK'); awaitingWithdraw.delete(userId); return safeSend(chatId, 'Начните с /start'); }
-        if (parseFloat(user.balance) < MIN_WITHDRAW) {
-            await client.query('ROLLBACK');
-            awaitingWithdraw.delete(userId);
-            return safeSend(chatId, `❌ Нужно ${MIN_WITHDRAW}⭐ (у тебя ${formatStars(user.balance)}).`);
-        }
-        const pending = await client.query(
-            `SELECT id FROM withdraw_requests WHERE user_id = $1 AND status = 'pending' LIMIT 1`,
-            [userId]
-        );
-        if (pending.rowCount > 0) {
-            await client.query('ROLLBACK');
-            awaitingWithdraw.delete(userId);
-            return safeSend(chatId, `⏳ Уже есть заявка #${pending.rows[0].id}.`);
-        }
+        if (parseFloat(user.balance) < MIN_WITHDRAW) { await client.query('ROLLBACK'); awaitingWithdraw.delete(userId); return safeSend(chatId, `❌ Нужно ${MIN_WITHDRAW}⭐ (у тебя ${formatStars(user.balance)}).`); }
+        const pending = await client.query(`SELECT id FROM withdraw_requests WHERE user_id = $1 AND status = 'pending' LIMIT 1`, [userId]);
+        if (pending.rowCount > 0) { await client.query('ROLLBACK'); awaitingWithdraw.delete(userId); return safeSend(chatId, `⏳ Уже есть заявка #${pending.rows[0].id}.`); }
         await client.query('COMMIT');
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         awaitingWithdraw.delete(userId);
         console.error('withdraw req:', e);
         return safeSend(chatId, '❌ Ошибка.');
-    } finally {
-        if (client) client.release();
-    }
+    } finally { if (client) client.release(); }
 
     if (awaitingWithdraw.get(userId)?.ts === ts) {
         awaitingWithdraw.set(userId, { ts, promptSent: true });
-        await safeSend(chatId,
-            `🎁 Вывод подарка «Мишка» (15⭐)\n\n` +
-            `⭐ Стоимость: ${GIFT_COST} звёзд\n` +
-            `📝 Отправь @username текстом\n` +
-            `⏱ 10 минут. Отмена — /cancel\n\n` +
-            `⚠️ Подарок нельзя обменять на звёзды.`
-        );
+        await safeSend(chatId, `🎁 Вывод подарка «Мишка» (15⭐)\n\n⭐ Стоимость: ${GIFT_COST} звёзд\n📝 Отправь @username\n⏱ 10 минут. Отмена — /cancel`);
     }
 }
 
 async function handleUsernameInput(msg, userId, ts) {
     const chatId = msg.chat.id;
     if (Date.now() - ts > WITHDRAW_TIMEOUT_MS) { awaitingWithdraw.delete(userId); return safeSend(chatId, '⌛ Время истекло.'); }
-    if (!msg.text) return safeSend(chatId, '📝 Отправь @username текстом.');
+    if (!msg.text) return safeSend(chatId, '📝 Отправь @username.');
     const text = msg.text.trim();
     if (!USERNAME_REGEX.test(text)) return safeSend(chatId, '❌ Некорректный @username.');
 
@@ -855,43 +652,24 @@ async function handleUsernameInput(msg, userId, ts) {
         const user = userRes.rows[0];
         if (!user) { await client.query('ROLLBACK'); return safeSend(chatId, 'Начните с /start'); }
 
-        const pending = await client.query(
-            `SELECT id FROM withdraw_requests WHERE user_id = $1 AND status = 'pending' LIMIT 1`,
-            [userId]
-        );
+        const pending = await client.query(`SELECT id FROM withdraw_requests WHERE user_id = $1 AND status = 'pending' LIMIT 1`, [userId]);
         if (pending.rowCount > 0) { await client.query('ROLLBACK'); return safeSend(chatId, `⏳ Уже есть заявка.`); }
 
-        const deduct = await client.query(
-            `UPDATE users SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING balance`,
-            [GIFT_COST, userId]
-        );
+        const deduct = await client.query(`UPDATE users SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING balance`, [GIFT_COST, userId]);
         if (deduct.rowCount === 0) { await client.query('ROLLBACK'); return safeSend(chatId, '❌ Недостаточно звёзд.'); }
 
-        const ins = await client.query(
-            `INSERT INTO withdraw_requests (user_id, username, gift) VALUES ($1, $2, $3) RETURNING id`,
-            [userId, text, 'Мишка (15⭐)']
-        );
+        const ins = await client.query(`INSERT INTO withdraw_requests (user_id, username, gift) VALUES ($1, $2, $3) RETURNING id`, [userId, text, 'Мишка (15⭐)']);
         const reqId = ins.rows[0].id;
-        await client.query(
-            `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-            [userId, -GIFT_COST, 'withdraw_hold', `Заявка #${reqId}`]
-        );
+        await client.query(`INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`, [userId, -GIFT_COST, 'withdraw_hold', `Заявка #${reqId}`]);
         await client.query('COMMIT');
 
         try {
             await bot.sendMessage(ADMIN_ID,
-                `🔔 <b>Заявка #${reqId}</b>\n\n` +
-                `👤 ${escapeHtml(user.first_name || '')} (@${escapeHtml(user.username || 'нет')})\n` +
-                `📮 ${escapeHtml(text)}\n🎁 Мишка | ⭐ -${GIFT_COST}\n💳 Остаток: ${formatStars(deduct.rows[0].balance)}`,
-                {
-                    parse_mode: 'HTML',
-                    reply_markup: {
-                        inline_keyboard: [[
-                            { text: '✅ Принять', callback_data: `admin_accept_${reqId}` },
-                            { text: '❌ Отклонить', callback_data: `admin_reject_${reqId}` },
-                        ]],
-                    },
-                }
+                `🔔 <b>Заявка #${reqId}</b>\n👤 ${escapeHtml(user.first_name || '')} (@${escapeHtml(user.username || 'нет')})\n📮 ${escapeHtml(text)}\n🎁 Мишка | ⭐ -${GIFT_COST}\n💳 Остаток: ${formatStars(deduct.rows[0].balance)}`,
+                { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[
+                    { text: '✅ Принять', callback_data: `admin_accept_${reqId}` },
+                    { text: '❌ Отклонить', callback_data: `admin_reject_${reqId}` },
+                ]] } }
             );
         } catch (e) { console.error('notify admin:', e.message); }
 
@@ -900,11 +678,8 @@ async function handleUsernameInput(msg, userId, ts) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error('withdraw create:', e);
         await safeSend(chatId, '❌ Ошибка.');
-    } finally {
-        if (client) client.release();
-    }
+    } finally { if (client) client.release(); }
 }
-
 async function handleAdminAccept(cb, reqId, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Не твоя.' });
     if (!Number.isInteger(reqId) || reqId <= 0) return answer({ text: 'Неверный ID.' });
@@ -912,16 +687,12 @@ async function handleAdminAccept(cb, reqId, answer) {
     try {
         client = await pool.connect();
         await client.query('BEGIN');
-        const upd = await client.query(
-            `UPDATE withdraw_requests SET status = 'accepted', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *`,
-            [reqId]
-        );
+        const upd = await client.query(`UPDATE withdraw_requests SET status = 'accepted', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *`, [reqId]);
         if (upd.rowCount === 0) { await client.query('ROLLBACK'); return answer({ text: 'Уже обработана.' }); }
         const req = upd.rows[0];
         await client.query('COMMIT');
-
         try { await bot.sendMessage(req.user_id, `🎉 Заявка #${reqId} принята!`); } catch (e) {}
-        try { await bot.sendMessage(ADMIN_ID, `✅ #${reqId} принята.\n👉 https://t.me/${req.username.replace('@', '')}`); } catch (e) {}
+        try { await bot.sendMessage(ADMIN_ID, `✅ #${reqId}.\n👉 https://t.me/${req.username.replace('@', '')}`); } catch (e) {}
         try { await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: cb.message.chat.id, message_id: cb.message.message_id }); } catch (e) {}
         await answer({ text: 'Принято!' });
     } catch (e) {
@@ -938,19 +709,12 @@ async function handleAdminReject(cb, reqId, answer) {
     try {
         client = await pool.connect();
         await client.query('BEGIN');
-        const upd = await client.query(
-            `UPDATE withdraw_requests SET status = 'rejected', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *`,
-            [reqId]
-        );
+        const upd = await client.query(`UPDATE withdraw_requests SET status = 'rejected', processed_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING *`, [reqId]);
         if (upd.rowCount === 0) { await client.query('ROLLBACK'); return answer({ text: 'Уже обработана.' }); }
         const req = upd.rows[0];
         await client.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [GIFT_COST, req.user_id]);
-        await client.query(
-            `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-            [req.user_id, GIFT_COST, 'withdraw_refund', `Возврат #${reqId}`]
-        );
+        await client.query(`INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`, [req.user_id, GIFT_COST, 'withdraw_refund', `Возврат #${reqId}`]);
         await client.query('COMMIT');
-
         try { await bot.sendMessage(req.user_id, `❌ Заявка #${reqId} отклонена. ${GIFT_COST}⭐ возвращены.`); } catch (e) {}
         try { await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: cb.message.chat.id, message_id: cb.message.message_id }); } catch (e) {}
         await answer({ text: 'Отклонено.' });
@@ -971,13 +735,7 @@ async function handleApproveSubmission(cb, subId, answer) {
         await answer({ text: 'Одобрено!' });
     } catch (e) {
         console.error('approve:', e);
-        const map = {
-            ALREADY_DONE: 'Уже обработана',
-            NOT_FOUND: 'Не найдена',
-            NO_SCREENSHOT: 'Нет скриншота',
-            BUDGET_EMPTY: 'Бюджет исчерпан',
-            TASK_CLOSED: 'Задание закрыто',
-        };
+        const map = { ALREADY_DONE: 'Уже обработана', NOT_FOUND: 'Не найдена', NO_SCREENSHOT: 'Нет скриншота', BUDGET_EMPTY: 'Бюджет исчерпан', TASK_CLOSED: 'Задание закрыто' };
         await answer({ text: map[e.message] || 'Ошибка' });
     }
 }
@@ -987,7 +745,7 @@ async function handleRejectSubmission(cb, subId, answer) {
     if (!Number.isInteger(subId) || subId <= 0) return answer({ text: 'Неверный ID.' });
     try {
         const sub = await db.rejectSubmission(subId, 'Скриншот не подтверждает подписку');
-        try { await bot.sendMessage(sub.user_id, `❌ Отклонено.\nПричина: скриншот не подтверждает подписку.`); } catch (e) {}
+        try { await bot.sendMessage(sub.user_id, `❌ Отклонено.`); } catch (e) {}
         try { await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: cb.message.chat.id, message_id: cb.message.message_id }); } catch (e) {}
         await answer({ text: 'Отклонено.' });
     } catch (e) {
@@ -999,109 +757,74 @@ async function handleRejectSubmission(cb, subId, answer) {
 async function handleAdminPending(cb, offset, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
     if (!Number.isInteger(offset) || offset < 0) offset = 0;
-
     try {
         const total = parseInt((await pool.query(`SELECT COUNT(*) FROM submissions WHERE status = 'pending'`)).rows[0].count, 10);
         if (total === 0) { await safeSend(cb.message.chat.id, 'Нет заявок.'); return answer(); }
         if (offset >= total) offset = Math.max(0, Math.floor((total - 1) / 5) * 5);
-
         const pending = await pool.query(
-            `SELECT s.id, s.user_id, t.channel_username, t.reward, u.username, u.first_name
-             FROM submissions s
-             JOIN tasks t ON s.task_id = t.id
-             JOIN users u ON s.user_id = u.id
-             WHERE s.status = 'pending'
-             ORDER BY s.created_at ASC LIMIT 5 OFFSET $1`,
+            `SELECT s.id, s.user_id, t.channel_username, t.reward, u.username, u.first_name FROM submissions s
+             JOIN tasks t ON s.task_id = t.id JOIN users u ON s.user_id = u.id
+             WHERE s.status = 'pending' ORDER BY s.created_at ASC LIMIT 5 OFFSET $1`,
             [offset]
         );
-
         await safeSend(cb.message.chat.id, `📸 Заявки ${offset + 1}–${offset + pending.rowCount} из ${total}:`);
-
         for (const s of pending.rows) {
             try {
                 const subRes = await pool.query('SELECT screenshot_file_id FROM submissions WHERE id = $1', [s.id]);
                 const fileId = subRes.rows[0]?.screenshot_file_id;
                 if (fileId) {
                     await bot.sendPhoto(cb.message.chat.id, fileId, {
-                        caption: (
-                            `#${s.id} | @${escapeHtml(s.channel_username)}\n` +
-                            `👤 ${escapeHtml(s.first_name || '')} (@${escapeHtml(s.username || 'нет')})\n` +
-                            `⭐ ${formatStars(s.reward)}`
-                        ).slice(0, 1000),
-                        reply_markup: {
-                            inline_keyboard: [[
-                                { text: '✅ Принять', callback_data: `approve_${s.id}` },
-                                { text: '❌ Отклонить', callback_data: `reject_${s.id}` },
-                            ]],
-                        },
+                        caption: `#${s.id} | @${escapeHtml(s.channel_username)}\n👤 ${escapeHtml(s.first_name || '')} (@${escapeHtml(s.username || 'нет')})\n⭐ ${formatStars(s.reward)}`,
+                        reply_markup: { inline_keyboard: [[
+                            { text: '✅ Принять', callback_data: `approve_${s.id}` },
+                            { text: '❌ Отклонить', callback_data: `reject_${s.id}` },
+                        ]] },
                     });
-                    await new Promise(r => setTimeout(r, 100)); // ✅ антифлуд
+                    await new Promise(r => setTimeout(r, 100));
                 }
             } catch (e) { console.error('sendPhoto:', e.message); }
         }
-
         const nav = [];
         if (offset > 0) nav.push({ text: '⬅️', callback_data: `admin_pending_${Math.max(0, offset - 5)}` });
         if (offset + 5 < total) nav.push({ text: '➡️', callback_data: `admin_pending_${offset + 5}` });
         if (nav.length) await safeSend(cb.message.chat.id, 'Навигация:', { reply_markup: { inline_keyboard: [nav] } });
         await answer();
-    } catch (e) {
-        console.error('handleAdminPending:', e);
-        await answer({ text: 'Ошибка' });
-    }
+    } catch (e) { console.error('handleAdminPending:', e); await answer({ text: 'Ошибка' }); }
 }
 
 async function handleAdminTasks(cb, offset, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
     if (!Number.isInteger(offset) || offset < 0) offset = 0;
-
     try {
         const total = parseInt((await pool.query('SELECT COUNT(*) FROM tasks')).rows[0].count, 10);
         if (total === 0) { await safeSend(cb.message.chat.id, '📋 Заданий нет.'); return answer(); }
         if (offset >= total) offset = Math.max(0, Math.floor((total - 1) / ADMIN_TASKS_PAGE) * ADMIN_TASKS_PAGE);
-
         const tasks = await pool.query(
-            `SELECT t.*, u.username as owner_username FROM tasks t
-             JOIN users u ON t.owner_id = u.id
+            `SELECT t.*, u.username as owner_username FROM tasks t JOIN users u ON t.owner_id = u.id
              ORDER BY t.created_at DESC LIMIT $1 OFFSET $2`,
             [ADMIN_TASKS_PAGE, offset]
         );
-
-        // ✅ ФИКС: объединяем в одно сообщение (антифлуд)
         let allText = `📋 <b>Задания</b> (${offset + 1}–${offset + tasks.rowCount} из ${total}):\n\n`;
         const allButtons = [];
-
         for (const t of tasks.rows) {
             const reward = parseFloat(t.reward);
             const budget = parseFloat(t.total_budget);
             const maxC = Math.floor(budget / reward);
             const spent = t.completed_count * reward;
-
-            allText += `#${t.id} ${t.is_active ? '🟢' : '🔴'} @${t.channel_username}\n`;
-            allText += `⭐ ${formatStars(reward)} | 💰 ${formatStars(budget)} | 📊 ${t.completed_count}/${maxC}\n\n`;
-
+            allText += `#${t.id} ${t.is_active ? '🟢' : '🔴'} @${t.channel_username}\n⭐ ${formatStars(reward)} | 💰 ${formatStars(budget)} | 📊 ${t.completed_count}/${maxC}\n\n`;
             allButtons.push([
                 { text: `${t.is_active ? '⏸' : '▶️'} #${t.id}`, callback_data: `admin_task_toggle_${t.id}_${offset}` },
                 { text: `🗑 #${t.id}`, callback_data: `admin_task_delete_${t.id}_${offset}` },
             ]);
         }
-
         await safeSend(cb.message.chat.id, trimIfLong(allText), { parse_mode: 'HTML' });
-
         const nav = [];
         if (offset > 0) nav.push({ text: '⬅️', callback_data: `admin_tasks_${Math.max(0, offset - ADMIN_TASKS_PAGE)}` });
         if (offset + ADMIN_TASKS_PAGE < total) nav.push({ text: '➡️', callback_data: `admin_tasks_${offset + ADMIN_TASKS_PAGE}` });
         nav.push({ text: '🔙 В меню', callback_data: 'admin_refresh' });
-
-        await safeSend(cb.message.chat.id, '⚙️ Управление:', {
-            reply_markup: { inline_keyboard: [...allButtons, nav] },
-        });
-
+        await safeSend(cb.message.chat.id, '⚙️ Управление:', { reply_markup: { inline_keyboard: [...allButtons, nav] } });
         await answer();
-    } catch (e) {
-        console.error('handleAdminTasks:', e);
-        await answer({ text: 'Ошибка' });
-    }
+    } catch (e) { console.error('handleAdminTasks:', e); await answer({ text: 'Ошибка' }); }
 }
 
 async function handleAdminTaskToggle(cb, taskId, offset, answer) {
@@ -1111,19 +834,13 @@ async function handleAdminTaskToggle(cb, taskId, offset, answer) {
         if (r.rowCount === 0) return answer({ text: 'Не найдено' });
         const isActive = r.rows[0].is_active;
         try {
-            await bot.editMessageReplyMarkup(
-                { inline_keyboard: [[
-                    { text: isActive ? '⏸ Выключить' : '▶️ Включить', callback_data: `admin_task_toggle_${taskId}_${offset}` },
-                    { text: '🗑 Удалить', callback_data: `admin_task_delete_${taskId}_${offset}` },
-                ]] },
-                { chat_id: cb.message.chat.id, message_id: cb.message.message_id }
-            );
+            await bot.editMessageReplyMarkup({ inline_keyboard: [[
+                { text: isActive ? '⏸ Выключить' : '▶️ Включить', callback_data: `admin_task_toggle_${taskId}_${offset}` },
+                { text: '🗑 Удалить', callback_data: `admin_task_delete_${taskId}_${offset}` },
+            ]] }, { chat_id: cb.message.chat.id, message_id: cb.message.message_id });
         } catch (e) {}
         await answer({ text: isActive ? '✅ Включено' : '⏸ Выключено' });
-    } catch (e) {
-        console.error('toggle:', e);
-        await answer({ text: 'Ошибка' });
-    }
+    } catch (e) { console.error('toggle:', e); await answer({ text: 'Ошибка' }); }
 }
 
 async function handleAdminTaskDelete(cb, taskId, offset, answer) {
@@ -1133,16 +850,11 @@ async function handleAdminTaskDelete(cb, taskId, offset, answer) {
         if (r.rowCount === 0) return answer({ text: 'Не найдено' });
         const task = r.rows[0];
         await safeSend(cb.message.chat.id,
-            `⚠️ <b>Удалить #${taskId}?</b>\n\n📺 @${task.channel_username}\n⭐ ${formatStars(task.reward)}\n💰 ${formatStars(task.total_budget)}\n\n❗️ Возврат остатка владельцу`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: '🗑 Да', callback_data: `admin_task_delete_confirm_${taskId}_${offset}` },
-                        { text: '↩️ Нет', callback_data: `admin_tasks_${offset}` },
-                    ]],
-                },
-            }
+            `⚠️ <b>Удалить #${taskId}?</b>\n\n📺 @${task.channel_username}\n⭐ ${formatStars(task.reward)}\n💰 ${formatStars(task.total_budget)}`,
+            { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[
+                { text: '🗑 Да', callback_data: `admin_task_delete_confirm_${taskId}_${offset}` },
+                { text: '↩️ Нет', callback_data: `admin_tasks_${offset}` },
+            ]] } }
         );
         await answer();
     } catch (e) { console.error('delete ask:', e); await answer({ text: 'Ошибка' }); }
@@ -1150,7 +862,6 @@ async function handleAdminTaskDelete(cb, taskId, offset, answer) {
 
 async function handleAdminTaskDeleteConfirm(cb, taskId, offset, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
-
     const c = await pool.connect();
     let task = null;
     let pendingSubs = null;
@@ -1159,47 +870,22 @@ async function handleAdminTaskDeleteConfirm(cb, taskId, offset, answer) {
         const r = await c.query('SELECT * FROM tasks WHERE id = $1 FOR UPDATE', [taskId]);
         if (r.rowCount === 0) { await c.query('ROLLBACK'); return answer({ text: 'Уже удалено' }); }
         task = r.rows[0];
-
         const spent = task.completed_count * parseFloat(task.reward);
         const refund = Math.max(0, parseFloat(task.total_budget) - spent);
-
         if (refund > 0) {
             await c.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [refund, task.owner_id]);
-            await c.query(
-                `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
-                [task.owner_id, refund, 'task_refund', `Возврат за удаление #${taskId}`]
-            );
+            await c.query(`INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`, [task.owner_id, refund, 'task_refund', `Возврат за удаление #${taskId}`]);
         }
-
-        // ✅ ФИКС: собираем pending перед удалением
-        pendingSubs = await c.query(
-            `SELECT user_id FROM submissions WHERE task_id = $1 AND status = 'pending'`,
-            [taskId]
-        );
-
+        pendingSubs = await c.query(`SELECT user_id FROM submissions WHERE task_id = $1 AND status = 'pending'`, [taskId]);
         await c.query('DELETE FROM submissions WHERE task_id = $1', [taskId]);
         await c.query('DELETE FROM task_completions WHERE task_id = $1', [taskId]);
         await c.query('DELETE FROM tasks WHERE id = $1', [taskId]);
         await c.query('COMMIT');
-
-        try {
-            await bot.sendMessage(task.owner_id,
-                `⚠️ Задание @${task.channel_username} удалено.\n` +
-                (refund > 0 ? `💰 Возвращено: ${formatStars(refund)}⭐` : '')
-            );
-        } catch (e) {}
-
-        // ✅ ФИКС: уведомляем юзеров с pending
+        try { await bot.sendMessage(task.owner_id, `⚠️ Задание @${task.channel_username} удалено.\n${refund > 0 ? `💰 Возвращено: ${formatStars(refund)}⭐` : ''}`); } catch (e) {}
         for (const s of pendingSubs.rows) {
-            try {
-                await bot.sendMessage(s.user_id,
-                    `⚠️ Задание @${task.channel_username} удалено администратором.\nСкриншот не будет обработан.`
-                );
-            } catch (e) {}
+            try { await bot.sendMessage(s.user_id, `⚠️ Задание @${task.channel_username} удалено. Скриншот не будет обработан.`); } catch (e) {}
         }
-
         await answer({ text: '✅ Удалено' });
-        // ✅ ФИКС: обновляем список с offset 0
         await handleAdminTasks(cb, 0, () => {});
     } catch (e) {
         await c.query('ROLLBACK').catch(() => {});
@@ -1211,27 +897,22 @@ async function handleAdminTaskDeleteConfirm(cb, taskId, offset, answer) {
 async function handleAdminUsers(cb, offset, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
     if (!Number.isInteger(offset) || offset < 0) offset = 0;
-
     try {
         const total = parseInt((await pool.query('SELECT COUNT(*) FROM users')).rows[0].count, 10);
         if (total === 0) { await safeSend(cb.message.chat.id, '👥 Нет.'); return answer(); }
         if (offset >= total) offset = Math.max(0, Math.floor((total - 1) / ADMIN_USERS_PAGE) * ADMIN_USERS_PAGE);
-
         const users = await pool.query(
             `SELECT id, username, first_name, balance, referral_count FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
             [ADMIN_USERS_PAGE, offset]
         );
-
         let msg = `👥 <b>Юзеры</b> (${offset + 1}–${offset + users.rowCount} из ${total}):\n\n`;
         for (const u of users.rows) {
             msg += `<code>${u.id}</code> ${escapeHtml(u.first_name || '')} @${escapeHtml(u.username || 'нет')} | ⭐${formatStars(u.balance)} | 👥${u.referral_count}\n`;
         }
-
         const nav = [];
         if (offset > 0) nav.push({ text: '⬅️', callback_data: `admin_users_${Math.max(0, offset - ADMIN_USERS_PAGE)}` });
         if (offset + ADMIN_USERS_PAGE < total) nav.push({ text: '➡️', callback_data: `admin_users_${offset + ADMIN_USERS_PAGE}` });
         nav.push({ text: '🔙 В меню', callback_data: 'admin_refresh' });
-
         await safeSend(cb.message.chat.id, trimIfLong(msg), { parse_mode: 'HTML', reply_markup: { inline_keyboard: [nav] } });
         await answer();
     } catch (e) { console.error('users:', e); await answer({ text: 'Ошибка' }); }
@@ -1240,22 +921,17 @@ async function handleAdminUsers(cb, offset, answer) {
 async function handleAdminWithdrawals(cb, offset, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
     if (!Number.isInteger(offset) || offset < 0) offset = 0;
-
     try {
         const total = parseInt((await pool.query(`SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'`)).rows[0].count, 10);
         if (total === 0) { await safeSend(cb.message.chat.id, '🎁 Нет заявок.'); return answer(); }
         if (offset >= total) offset = Math.max(0, Math.floor((total - 1) / 5) * 5);
-
         const rows = await pool.query(
-            `SELECT w.*, u.username as user_username, u.first_name FROM withdraw_requests w
-             JOIN users u ON w.user_id = u.id
+            `SELECT w.*, u.username as user_username, u.first_name FROM withdraw_requests w JOIN users u ON w.user_id = u.id
              WHERE w.status = 'pending' ORDER BY w.created_at ASC LIMIT 5 OFFSET $1`,
             [offset]
         );
-
         let msg = `🎁 <b>Заявки на вывод</b> (${offset + 1}–${offset + rows.rowCount} из ${total}):\n\n`;
         const allButtons = [];
-
         for (const w of rows.rows) {
             msg += `#${w.id} | ${escapeHtml(w.first_name || '')} (@${escapeHtml(w.user_username || 'нет')})\n📮 ${escapeHtml(w.username)}\n🎁 ${w.gift}\n\n`;
             allButtons.push([
@@ -1263,17 +939,12 @@ async function handleAdminWithdrawals(cb, offset, answer) {
                 { text: `❌ #${w.id}`, callback_data: `admin_reject_${w.id}` },
             ]);
         }
-
         await safeSend(cb.message.chat.id, trimIfLong(msg), { parse_mode: 'HTML' });
-
         const nav = [];
         if (offset > 0) nav.push({ text: '⬅️', callback_data: `admin_withdrawals_${Math.max(0, offset - 5)}` });
         if (offset + 5 < total) nav.push({ text: '➡️', callback_data: `admin_withdrawals_${offset + 5}` });
         nav.push({ text: '🔙 В меню', callback_data: 'admin_refresh' });
-
-        await safeSend(cb.message.chat.id, '⚙️ Управление:', {
-            reply_markup: { inline_keyboard: [...allButtons, nav] },
-        });
+        await safeSend(cb.message.chat.id, '⚙️ Управление:', { reply_markup: { inline_keyboard: [...allButtons, nav] } });
         await answer();
     } catch (e) { console.error('withdrawals:', e); await answer({ text: 'Ошибка' }); }
 }
@@ -1281,10 +952,7 @@ async function handleAdminWithdrawals(cb, offset, answer) {
 async function handleAdminBroadcast(cb, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
     broadcastState.set(cb.from.id, true);
-    await safeSend(cb.message.chat.id,
-        `📢 <b>Рассылка</b>\n\nОтправь текст, фото, видео или стикер.\n❌ Отмена — /cancel`,
-        { parse_mode: 'HTML' }
-    );
+    await safeSend(cb.message.chat.id, `📢 <b>Рассылка</b>\n\nОтправь текст, фото, видео или стикер.\n❌ Отмена — /cancel`, { parse_mode: 'HTML' });
     await answer();
 }
 
@@ -1292,26 +960,17 @@ async function tryHandleBroadcast(msg) {
     const userId = msg.from?.id;
     if (userId !== ADMIN_ID) return false;
     if (!broadcastState.get(userId)) return false;
-
-    // ✅ ФИКС: защита от параллельного запуска
-    if (broadcastRunning.has(userId)) {
-        await safeSend(msg.chat.id, '⚠️ Рассылка уже идёт. /cancel для остановки.');
-        return true;
-    }
-
+    if (broadcastRunning.has(userId)) { await safeSend(msg.chat.id, '⚠️ Рассылка уже идёт.'); return true; }
     if (!msg.text && !msg.photo && !msg.video && !msg.sticker) {
-        await safeSend(msg.chat.id, '⚠️ Поддерживается: текст, фото, видео, стикер. Попробуй снова или /cancel.');
+        await safeSend(msg.chat.id, '⚠️ Поддерживается: текст, фото, видео, стикер.');
         return true;
     }
-
     broadcastState.delete(userId);
     broadcastRunning.add(userId);
-
     try {
         const users = await pool.query('SELECT id FROM users');
         let sent = 0, failed = 0, cancelled = false;
         await safeSend(msg.chat.id, `📢 Рассылка для ${users.rowCount}...\n❌ Отмена — /cancel`);
-
         for (const u of users.rows) {
             if (!broadcastRunning.has(userId)) { cancelled = true; break; }
             try {
@@ -1323,39 +982,23 @@ async function tryHandleBroadcast(msg) {
                 await new Promise(r => setTimeout(r, 30));
             } catch (e) { failed++; }
         }
-
-        await safeSend(msg.chat.id,
-            cancelled ? `⏹ Отменено. Отправлено: ${sent}` : `✅ Готово. Отправлено: ${sent}, ошибок: ${failed}`
-        );
-    } finally {
-        broadcastRunning.delete(userId);
-    }
+        await safeSend(msg.chat.id, cancelled ? `⏹ Отменено. Отправлено: ${sent}` : `✅ Готово. Отправлено: ${sent}, ошибок: ${failed}`);
+    } finally { broadcastRunning.delete(userId); }
     return true;
 }
 
-// ============ КРИПТО-ПОПОЛНЕНИЕ ============
+// ============ КРИПТО ============
 async function handleCryptoDeposit(chatId, userId) {
     if (!cryptoClient) return safeSend(chatId, '❌ Крипта недоступна.');
-
-    const message =
-        `💳 <b>Пополнение через крипту</b>\n\n` +
-        `💵 Курс: 1 USDT = ${USDT_TO_STARS} звёзд\n` +
-        `💡 Минимум для вывода: ${MIN_WITHDRAW} звёзд\n\nВыбери сумму:`;
-
-    const keyboard = CRYPTO_PACKAGES.map(amount => [{
-        text: `💵 ${amount} USDT → ${amount * USDT_TO_STARS} звёзд`,
-        callback_data: `crypto_buy_${amount}`,
-    }]);
-
+    const message = `💳 <b>Пополнение через крипту</b>\n\n💵 Курс: 1 USDT = ${USDT_TO_STARS} звёзд\n💡 Минимум для вывода: ${MIN_WITHDRAW} звёзд\n\nВыбери сумму:`;
+    const keyboard = CRYPTO_PACKAGES.map(amount => [{ text: `💵 ${amount} USDT → ${amount * USDT_TO_STARS} звёзд`, callback_data: `crypto_buy_${amount}` }]);
     await safeSend(chatId, message, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function sendCryptoInvoice(chatId, userId, usdtAmount) {
     if (!cryptoClient) return safeSend(chatId, '❌ Крипта недоступна.');
     if (!CRYPTO_PACKAGES.includes(usdtAmount)) return safeSend(chatId, '❌ Неверная сумма.');
-
     const payload = `dep_${userId}_${usdtAmount}_${Date.now()}`;
-
     try {
         const invoice = await cryptoClient.createInvoice({
             asset: 'USDT',
@@ -1365,29 +1008,17 @@ async function sendCryptoInvoice(chatId, userId, usdtAmount) {
             paid_btn_name: 'callback',
             paid_btn_url: `https://t.me/${BOT_USERNAME}`,
         });
-
         await safeSend(chatId,
-            `💳 <b>Счёт на ${usdtAmount} USDT</b>\n\n` +
-            `⭐ Придёт ${usdtAmount * USDT_TO_STARS} звёзд.\n` +
-            `⏱ Счёт действует 1 час.\n\n` +
-            `👇 Нажми кнопку ниже, чтобы оплатить:`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [[
-                        { text: `💳 Оплатить ${usdtAmount} USDT`, url: invoice.bot_invoice_url }
-                    ]],
-                },
-            }
+            `💳 <b>Счёт на ${usdtAmount} USDT</b>\n\n⭐ Придёт ${usdtAmount * USDT_TO_STARS} звёзд.\n⏱ Счёт действует 1 час.\n\n👇 Нажми кнопку ниже:`,
+            { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[
+                { text: `💳 Оплатить ${usdtAmount} USDT`, url: invoice.bot_invoice_url }
+            ]] } }
         );
-    } catch (e) {                                                    // ← ЭТО
-        console.error('sendCryptoInvoice:', e.message);              // ← ЭТО
-        await safeSend(chatId, '❌ Ошибка. Попробуй позже.');          // ← ЭТО
-    }                                                                // ← ЭТО
-}                                                                    // ← И ЭТО
-
-// ============ CALLBACK ============
-bot.on('callback_query', async (cb) => {
+    } catch (e) {
+        console.error('sendCryptoInvoice:', e.message);
+        await safeSend(chatId, '❌ Ошибка. Попробуй позже.');
+    }
+}
 
 // ============ CALLBACK ============
 bot.on('callback_query', async (cb) => {
@@ -1397,7 +1028,6 @@ bot.on('callback_query', async (cb) => {
     if (!msg || !msg.chat) { try { await bot.answerCallbackQuery(cb.id); } catch (e) {} return; }
     const chatId = msg.chat.id;
     const userId = cb.from.id;
-
     let answered = false;
     const answer = async (opts = {}) => {
         if (answered) return;
@@ -1406,113 +1036,64 @@ bot.on('callback_query', async (cb) => {
     };
 
     try {
-        if (action.startsWith('tasks_page_')) {
-            await handleEarnCommand(chatId, userId, parseInt(action.slice(11), 10) || 0);
-            await answer();
-        } else if (action === 'refresh_tasks') {
-            await handleEarnCommand(chatId, userId, 0);
-            await answer();
-        } else if (action === 'referral') {
-            await handleReferral(chatId, userId);
-            await answer();
-        } else if (action === 'my_tasks') {
-            await handleMyTasks(chatId, userId);
-            await answer();
-        } else if (action === 'transactions') {
-            await handleTransactions(chatId, userId);
-            await answer();
-        } else if (action === 'crypto_deposit') {
-            await handleCryptoDeposit(chatId, userId);
-            await answer();
-        } else if (action.startsWith('crypto_buy_')) {
-            const amount = parseFloat(action.slice(11));
-            await answer();
-            await sendCryptoInvoice(chatId, userId, amount);
-        } else if (action === 'withdraw_gift') {
-            await answer();
-            await handleWithdrawRequest(chatId, userId);
-        } else if (action.startsWith('send_screenshot_')) {
+        if (action.startsWith('tasks_page_')) { await handleEarnCommand(chatId, userId, parseInt(action.slice(11), 10) || 0); await answer(); }
+        else if (action === 'refresh_tasks') { await handleEarnCommand(chatId, userId, 0); await answer(); }
+        else if (action === 'referral') { await handleReferral(chatId, userId); await answer(); }
+        else if (action === 'my_tasks') { await handleMyTasks(chatId, userId); await answer(); }
+        else if (action === 'transactions') { await handleTransactions(chatId, userId); await answer(); }
+        else if (action === 'crypto_deposit') { await handleCryptoDeposit(chatId, userId); await answer(); }
+        else if (action.startsWith('crypto_buy_')) { const amount = parseFloat(action.slice(11)); await answer(); await sendCryptoInvoice(chatId, userId, amount); }
+        else if (action === 'withdraw_gift') { await answer(); await handleWithdrawRequest(chatId, userId); }
+        else if (action.startsWith('send_screenshot_')) {
             const taskId = parseInt(action.slice(16), 10);
             if (!Number.isInteger(taskId) || taskId <= 0) return answer({ text: 'Неверное задание' });
             const existing = awaitingScreenshot.get(userId);
-            if (existing && Date.now() - existing.ts < SCREENSHOT_TIMEOUT_MS && existing.taskId !== taskId) {
-                return answer({ text: '⚠️ Сначала отправь скриншот или /cancel' });
-            }
+            if (existing && Date.now() - existing.ts < SCREENSHOT_TIMEOUT_MS && existing.taskId !== taskId) return answer({ text: '⚠️ Сначала отправь скриншот или /cancel' });
             awaitingScreenshot.set(userId, { taskId, ts: Date.now() });
             await safeSend(chatId, `📸 Отправь скриншот.\n⏱ 10 минут. Отмена — /cancel`);
             await answer();
-        } else if (action === 'noop') {
-            await answer({ text: 'Уже на проверке' });
-        } else if (action.startsWith('approve_')) {
-            await handleApproveSubmission(cb, parseInt(action.slice(8), 10), answer);
-        } else if (action.startsWith('reject_')) {
-            await handleRejectSubmission(cb, parseInt(action.slice(7), 10), answer);
-        } else if (action.startsWith('admin_accept_')) {
-            await handleAdminAccept(cb, parseInt(action.slice(13), 10), answer);
-        } else if (action.startsWith('admin_reject_')) {
-            await handleAdminReject(cb, parseInt(action.slice(13), 10), answer);
-        } else if (action.startsWith('admin_pending_')) {
-            await handleAdminPending(cb, parseInt(action.slice(14), 10) || 0, answer);
-        } else if (action.startsWith('admin_tasks_')) {
-            await handleAdminTasks(cb, parseInt(action.slice(12), 10) || 0, answer);
-        } else if (action.startsWith('admin_task_toggle_')) {
-            const parts = action.split('_');
-            await handleAdminTaskToggle(cb, parseInt(parts[3], 10), parseInt(parts[4], 10), answer);
-        } else if (action.startsWith('admin_task_delete_confirm_')) {
-            const parts = action.split('_');
-            await handleAdminTaskDeleteConfirm(cb, parseInt(parts[4], 10), parseInt(parts[5], 10), answer);
-        } else if (action.startsWith('admin_task_delete_')) {
-            const parts = action.split('_');
-            await handleAdminTaskDelete(cb, parseInt(parts[3], 10), parseInt(parts[4], 10), answer);
-        } else if (action.startsWith('admin_users_')) {
-            await handleAdminUsers(cb, parseInt(action.slice(12), 10) || 0, answer);
-        } else if (action.startsWith('admin_withdrawals_')) {
-            await handleAdminWithdrawals(cb, parseInt(action.slice(18), 10) || 0, answer);
-        } else if (action === 'admin_broadcast') {
-            await handleAdminBroadcast(cb, answer);
-        } else if (action === 'admin_refresh') {
+        }
+        else if (action === 'noop') { await answer({ text: 'Уже на проверке' }); }
+        else if (action.startsWith('approve_')) { await handleApproveSubmission(cb, parseInt(action.slice(8), 10), answer); }
+        else if (action.startsWith('reject_')) { await handleRejectSubmission(cb, parseInt(action.slice(7), 10), answer); }
+        else if (action.startsWith('admin_accept_')) { await handleAdminAccept(cb, parseInt(action.slice(13), 10), answer); }
+        else if (action.startsWith('admin_reject_')) { await handleAdminReject(cb, parseInt(action.slice(13), 10), answer); }
+        else if (action.startsWith('admin_pending_')) { await handleAdminPending(cb, parseInt(action.slice(14), 10) || 0, answer); }
+        else if (action.startsWith('admin_tasks_')) { await handleAdminTasks(cb, parseInt(action.slice(12), 10) || 0, answer); }
+        else if (action.startsWith('admin_task_toggle_')) { const p = action.split('_'); await handleAdminTaskToggle(cb, parseInt(p[3], 10), parseInt(p[4], 10), answer); }
+        else if (action.startsWith('admin_task_delete_confirm_')) { const p = action.split('_'); await handleAdminTaskDeleteConfirm(cb, parseInt(p[4], 10), parseInt(p[5], 10), answer); }
+        else if (action.startsWith('admin_task_delete_')) { const p = action.split('_'); await handleAdminTaskDelete(cb, parseInt(p[3], 10), parseInt(p[4], 10), answer); }
+        else if (action.startsWith('admin_users_')) { await handleAdminUsers(cb, parseInt(action.slice(12), 10) || 0, answer); }
+        else if (action.startsWith('admin_withdrawals_')) { await handleAdminWithdrawals(cb, parseInt(action.slice(18), 10) || 0, answer); }
+        else if (action === 'admin_broadcast') { await handleAdminBroadcast(cb, answer); }
+        else if (action === 'admin_refresh') {
             await answer();
             try {
                 const d = await buildAdminPanelData();
-                await bot.editMessageText(buildAdminPanelText(d), {
-                    chat_id: cb.message.chat.id,
-                    message_id: cb.message.message_id,
-                    parse_mode: 'HTML',
-                    reply_markup: buildAdminPanelKeyboard(d),
-                });
+                await bot.editMessageText(buildAdminPanelText(d), { chat_id: cb.message.chat.id, message_id: cb.message.message_id, parse_mode: 'HTML', reply_markup: buildAdminPanelKeyboard(d) });
             } catch (e) {
                 const d = await buildAdminPanelData();
-                await safeSend(cb.message.chat.id, buildAdminPanelText(d), {
-                    parse_mode: 'HTML',
-                    reply_markup: buildAdminPanelKeyboard(d),
-                });
+                await safeSend(cb.message.chat.id, buildAdminPanelText(d), { parse_mode: 'HTML', reply_markup: buildAdminPanelKeyboard(d) });
             }
-        } else {
-            await answer();
         }
-    } catch (e) {
-        console.error('callback:', e);
-        await answer({ text: 'Ошибка' });
-    }
+        else { await answer(); }
+    } catch (e) { console.error('callback:', e); await answer({ text: 'Ошибка' }); }
 });
 
 async function handleReferral(chatId, userId) {
     const user = await db.getUser(userId);
     const link = `https://t.me/${BOT_USERNAME}?start=_${user.id}`;
-    const message =
-        `👥 Реферальная система\n\n🔗 <code>${link}</code>\n\n` +
-        `📊 Приглашено: <b>${user.referral_count}</b>\n` +
-        `⭐ Заработано: <b>${formatStars(user.referral_count * REFERRAL_BONUS)}</b>\n\n` +
-        `💡 ${formatStars(REFERRAL_BONUS)} звёзд за друга`;
-    await safeSend(chatId, message, { parse_mode: 'HTML' });
+    await safeSend(chatId,
+        `👥 Реферальная система\n\n🔗 <code>${link}</code>\n\n📊 Приглашено: <b>${user.referral_count}</b>\n⭐ Заработано: <b>${formatStars(user.referral_count * REFERRAL_BONUS)}</b>\n\n💡 ${formatStars(REFERRAL_BONUS)} звёзд за друга`,
+        { parse_mode: 'HTML' }
+    );
 }
 
 async function handleMyTasks(chatId, userId) {
     const tasks = await db.getUserTasks(userId);
     if (!tasks.length) return safeSend(chatId, '📋 Нет заданий.');
     let message = '📋 Ваши задания:\n\n';
-    const shown = tasks.slice(0, 15);
-    shown.forEach((t, i) => {
+    tasks.slice(0, 15).forEach((t, i) => {
         const reward = parseFloat(t.reward);
         const budget = parseFloat(t.total_budget);
         const maxC = Math.floor(budget / reward);
@@ -1523,10 +1104,7 @@ async function handleMyTasks(chatId, userId) {
 }
 
 async function handleTransactions(chatId, userId) {
-    const r = await pool.query(
-        `SELECT * FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10`,
-        [userId]
-    );
+    const r = await pool.query(`SELECT * FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10`, [userId]);
     if (!r.rows.length) return safeSend(chatId, '📊 Пусто.');
     let message = '📊 Последние 10:\n\n';
     r.rows.forEach(tx => {
@@ -1543,56 +1121,35 @@ async function initDatabase() {
         await pool.query('SELECT NOW()');
         console.log('✅ БД подключена');
         await createTablesIfNotExist();
-    } catch (e) {
-        console.error('❌ Ошибка БД:', e);
-        process.exit(1);
-    }
+    } catch (e) { console.error('❌ Ошибка БД:', e); process.exit(1); }
 }
 
 async function createTablesIfNotExist() {
-    const check = await pool.query(`
-        SELECT EXISTS (SELECT FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = 'users');
-    `);
+    const check = await pool.query(`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users');`);
     if (!check.rows[0].exists) {
         console.log('🔄 Создание таблиц...');
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
-                id BIGINT PRIMARY KEY,
-                username VARCHAR(255),
-                first_name VARCHAR(255),
-                balance NUMERIC(12,4) DEFAULT 0,
-                referral_count INTEGER DEFAULT 0,
-                referred_by BIGINT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id BIGINT PRIMARY KEY, username VARCHAR(255), first_name VARCHAR(255),
+                balance NUMERIC(12,4) DEFAULT 0, referral_count INTEGER DEFAULT 0,
+                referred_by BIGINT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS tasks (
-                id SERIAL PRIMARY KEY,
-                owner_id BIGINT NOT NULL,
-                channel_username VARCHAR(255) NOT NULL,
+                id SERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, channel_username VARCHAR(255) NOT NULL,
                 reward NUMERIC(10,4) NOT NULL CHECK (reward >= 0.05 AND reward <= 10),
-                total_budget NUMERIC(12,4) NOT NULL,
-                completed_count INTEGER DEFAULT 0,
-                is_active BOOLEAN DEFAULT true,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                total_budget NUMERIC(12,4) NOT NULL, completed_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (owner_id) REFERENCES users(id)
             );
             CREATE TABLE IF NOT EXISTS task_completions (
-                id SERIAL PRIMARY KEY,
-                task_id INTEGER NOT NULL,
-                user_id BIGINT NOT NULL,
+                id SERIAL PRIMARY KEY, task_id INTEGER NOT NULL, user_id BIGINT NOT NULL,
                 completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES tasks(id),
-                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (task_id) REFERENCES tasks(id), FOREIGN KEY (user_id) REFERENCES users(id),
                 UNIQUE(task_id, user_id)
             );
             CREATE TABLE IF NOT EXISTS transactions (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                amount NUMERIC(12,4) NOT NULL,
-                type VARCHAR(50) NOT NULL,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, amount NUMERIC(12,4) NOT NULL,
+                type VARCHAR(50) NOT NULL, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
         `);
@@ -1601,57 +1158,38 @@ async function createTablesIfNotExist() {
         console.log('✅ Таблицы уже есть');
     }
 
-    // Миграция (если БД старая)
     try {
         await pool.query(`ALTER TABLE users ALTER COLUMN balance TYPE NUMERIC(12,4) USING balance::numeric`);
         await pool.query(`ALTER TABLE tasks ALTER COLUMN reward TYPE NUMERIC(10,4) USING reward::numeric`);
         await pool.query(`ALTER TABLE tasks ALTER COLUMN total_budget TYPE NUMERIC(12,4) USING total_budget::numeric`);
         await pool.query(`ALTER TABLE transactions ALTER COLUMN amount TYPE NUMERIC(12,4) USING amount::numeric`);
-
-        const cc = await pool.query(`
-            SELECT pg_get_constraintdef(c.oid) AS def
-            FROM pg_constraint c
-            JOIN pg_class t ON c.conrelid = t.oid
-            WHERE t.relname = 'tasks' AND c.conname = 'tasks_reward_check'
-        `);
+        const cc = await pool.query(`SELECT pg_get_constraintdef(c.oid) AS def FROM pg_constraint c JOIN pg_class t ON c.conrelid = t.oid WHERE t.relname = 'tasks' AND c.conname = 'tasks_reward_check'`);
         if (cc.rowCount > 0 && (cc.rows[0].def.includes('15') || cc.rows[0].def.includes('50'))) {
             await pool.query(`UPDATE tasks SET reward = 10 WHERE reward > 10`);
             await pool.query(`UPDATE tasks SET reward = 0.05 WHERE reward < 0.05`);
             await pool.query(`ALTER TABLE tasks DROP CONSTRAINT tasks_reward_check`);
             await pool.query(`ALTER TABLE tasks ADD CONSTRAINT tasks_reward_check CHECK (reward >= 0.05 AND reward <= 10)`);
-            console.log('✅ Миграция CHECK выполнена');
+            console.log('✅ Миграция CHECK');
         }
-    } catch (e) {
-        console.error('⚠️ Миграция:', e.message);
-    }
+    } catch (e) { console.error('⚠️ Миграция:', e.message); }
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS withdraw_requests (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            username VARCHAR(64) NOT NULL,
-            gift VARCHAR(100) NOT NULL,
-            status VARCHAR(20) NOT NULL DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            username VARCHAR(64) NOT NULL, gift VARCHAR(100) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'pending', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             processed_at TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_withdraw_requests_status ON withdraw_requests(status);
-
         CREATE TABLE IF NOT EXISTS submissions (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-            screenshot_file_id TEXT NOT NULL,
-            status VARCHAR(20) NOT NULL DEFAULT 'pending',
-            reject_reason TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            processed_at TIMESTAMP
+            screenshot_file_id TEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            reject_reason TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, processed_at TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status);
-
         CREATE TABLE IF NOT EXISTS processed_payments (
-            payload TEXT PRIMARY KEY,
-            processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            payload TEXT PRIMARY KEY, processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     `);
     console.log('✅ Доп. таблицы готовы');
@@ -1665,7 +1203,6 @@ bot.on('polling_error', (error) => {
     if (error.message.includes('401')) process.exit(1);
     if (pollingErrors >= 10) process.exit(1);
 });
-
 process.on('uncaughtException', (e) => { console.error('❌ Uncaught:', e); process.exit(1); });
 process.on('unhandledRejection', (e) => { console.error('❌ Unhandled:', e); process.exit(1); });
 
