@@ -1000,7 +1000,7 @@ async function sendCryptoInvoice(chatId, userId, usdtAmount) {
     if (!CRYPTO_PACKAGES.includes(usdtAmount)) return safeSend(chatId, '❌ Неверная сумма.');
     const payload = `dep_${userId}_${usdtAmount}_${Date.now()}`;
     try {
-        const invoice = await cryptoClient.createInvoice({
+                const invoice = await cryptoClient.createInvoice({
             asset: 'USDT',
             amount: usdtAmount.toString(),
             description: `Пополнение на ${usdtAmount} USDT`,
@@ -1008,11 +1008,29 @@ async function sendCryptoInvoice(chatId, userId, usdtAmount) {
             paid_btn_name: 'callback',
             paid_btn_url: `https://t.me/${BOT_USERNAME}`,
         });
+
+        // ✅ Отладка — покажет в логах, что вернул CryptoBot
+        console.log('Invoice result:', JSON.stringify(invoice));
+
+        // ✅ Проверка: есть ли URL счёта
+        if (!invoice || !invoice.bot_invoice_url) {
+            console.error('❌ Пустой bot_invoice_url:', invoice);
+            return safeSend(chatId, '❌ Не удалось создать счёт. Попробуй позже.');
+        }
+
         await safeSend(chatId,
-            `💳 <b>Счёт на ${usdtAmount} USDT</b>\n\n⭐ Придёт ${usdtAmount * USDT_TO_STARS} звёзд.\n⏱ Счёт действует 1 час.\n\n👇 Нажми кнопку ниже:`,
-            { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[
-                { text: `💳 Оплатить ${usdtAmount} USDT`, url: invoice.bot_invoice_url }
-            ]] } }
+            `💳 <b>Счёт на ${usdtAmount} USDT</b>\n\n` +
+            `⭐ Придёт ${usdtAmount * USDT_TO_STARS} звёзд.\n` +
+            `⏱ Счёт действует 1 час.\n\n` +
+            `👇 Нажми кнопку ниже, чтобы оплатить:`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: `💳 Оплатить ${usdtAmount} USDT`, url: invoice.bot_invoice_url }
+                    ]],
+                },
+            }
         );
     } catch (e) {
         console.error('sendCryptoInvoice:', e.message);
