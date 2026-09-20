@@ -126,7 +126,6 @@ app.post('/crypto/webhook', express.raw({ type: 'application/json' }), async (re
 app.listen(PORT, () => console.log(`Server on port ${PORT}`));
 
 // ============ КОНСТАНТЫ ============
-// ============ КОНСТАНТЫ ============
 const REFERRAL_BONUS = 0.05;
 const MIN_TASK_REWARD = 0.05;
 const MAX_TASK_REWARD = 10;
@@ -352,10 +351,13 @@ bot.onText(/^\/cancel(?:@\w+)?$/, async (msg) => {
     if (msg.chat.type !== 'private') return;
     const userId = msg.from.id;
     let cancelled = false;
+
     if (awaitingWithdraw.has(userId)) { awaitingWithdraw.delete(userId); cancelled = true; }
     if (awaitingScreenshot.has(userId)) { awaitingScreenshot.delete(userId); cancelled = true; }
+    if (awaitingCryptoAmount.has(userId)) { awaitingCryptoAmount.delete(userId); cancelled = true; }
     if (broadcastState.has(userId)) { broadcastState.delete(userId); cancelled = true; }
     if (broadcastRunning.has(userId)) { broadcastRunning.delete(userId); cancelled = true; }
+
     await safeSend(msg.chat.id, cancelled ? '❌ Отменено.' : 'Нечего отменять.');
 });
 
