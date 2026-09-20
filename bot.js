@@ -443,7 +443,10 @@ bot.on('message', async (msg) => {
     if (fileId) {
         const state = awaitingScreenshot.get(userId);
         if (!state) return;
-        if (Date.now() - state.ts > SCREENSHOT_TIMEOUT_MS) { awaitingScreenshot.delete(userId); return safeSend(msg.chat.id, '⌛ Время истекло.'); }
+        if (Date.now() - state.ts > SCREENSHOT_TIMEOUT_MS) {
+            awaitingScreenshot.delete(userId);
+            return safeSend(msg.chat.id, '⌛ Время истекло.');
+        }
         if (fileId.length < 10) return safeSend(msg.chat.id, '❌ Не удалось получить файл.');
 
         awaitingScreenshot.delete(userId);
@@ -480,6 +483,27 @@ bot.on('message', async (msg) => {
 
     const text = (msg.text || '').trim();
     if (!text || text.startsWith('/')) return;
+
+    // ===== Ввод своей суммы для крипты =====
+    if (awaitingCryptoAmount.has(userId)) {
+        if (Date.now() - awaitingCryptoAmount.get(userId) > 5 * 60 * 1000) {
+            awaitingCryptoAmount.delete(userId);
+            return safeSend(msg.chat.id, '⌛ Время истекло. Попробуй снова.');
+        }
+
+        if (!msg.text) return safeSend(msg.chat.id, '📝 Введи сумму числом.');
+
+        const amount = parseFloat(text.replace(',', '.'));
+        if (Number.isNaN(amount) || amount < CRYPTO_MIN_AMOUNT || amount > CRYPTO_MAX_AMOUNT) {
+            return safeSend(msg.chat.id, `❌ Нужно число от ${CRYPTO_MIN_AMOUNT} до ${CRYPTO_MAX_AMOUNT}.`);
+        }
+
+        awaitingCryptoAmount.delete(userId);
+        const amountR = Math.round(amount * 100) / 100;
+
+        await sendCryptoInvoice(msg.chat.id, userId, amountR);
+        return;
+    }
 
     const wState = awaitingWithdraw.get(userId);
     if (wState) {
