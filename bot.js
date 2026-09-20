@@ -1358,7 +1358,7 @@ async function sendCryptoInvoice(chatId, userId, usdtAmount) {
 
     try {
         const invoice = await cryptoClient.createInvoice({
-            asset: 'USDT_TON',
+            asset: 'USDT',
             amount: usdtAmount.toString(),
             description: `Пополнение на ${usdtAmount} USDT`,
             payload: payload,
