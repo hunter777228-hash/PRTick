@@ -1013,7 +1013,7 @@ async function sendCryptoInvoice(chatId, userId, usdtAmount) {
         console.log('Invoice result:', JSON.stringify(invoice));
 
         // ✅ Проверка: есть ли URL счёта
-        if (!invoice || !invoice.bot_invoice_url) {
+        if (!invoice || !invoice.botPayUrl) {
             console.error('❌ Пустой bot_invoice_url:', invoice);
             return safeSend(chatId, '❌ Не удалось создать счёт. Попробуй позже.');
         }
