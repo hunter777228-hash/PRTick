@@ -2,20 +2,17 @@
   "name": "tick-telegram-bot",
   "version": "1.0.0",
   "description": "Telegram bot for mutual subscriptions and sponsor checks",
-  "main": "index.js",
+  "main": "bot.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js",
-    "build": "echo 'No build step needed for Node.js'",
-    "test": "node test-bot.js",
-    "init-db": "node init-database.js",
-    "railway:start": "node bot.js"
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.65.1",
-    "pg": "^8.11.3",
+    "crypto-bot-api": "^2.2.7",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "pg": "^8.11.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
