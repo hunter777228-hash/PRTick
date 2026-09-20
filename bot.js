@@ -1027,7 +1027,7 @@ async function sendCryptoInvoice(chatId, userId, usdtAmount) {
                 parse_mode: 'HTML',
                 reply_markup: {
                     inline_keyboard: [[
-                        { text: `💳 Оплатить ${usdtAmount} USDT`, url: invoice.bot_invoice_url }
+                        { text: `💳 Оплатить ${usdtAmount} USDT`, url: invoice.botPayUrl }
                     ]],
                 },
             }
