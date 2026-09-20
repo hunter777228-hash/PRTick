@@ -1020,17 +1020,36 @@ async function tryHandleBroadcast(msg) {
 // ============ КРИПТО ============
 async function handleCryptoDeposit(chatId, userId) {
     if (!cryptoClient) return safeSend(chatId, '❌ Крипта недоступна.');
-    const message = `💳 <b>Пополнение через крипту</b>\n\n💵 Курс: 1 USDT = ${USDT_TO_STARS} звёзд\n💡 Минимум для вывода: ${MIN_WITHDRAW} звёзд\n\nВыбери сумму:`;
-    const keyboard = CRYPTO_PACKAGES.map(amount => [{ text: `💵 ${amount} USDT → ${amount * USDT_TO_STARS} звёзд`, callback_data: `crypto_buy_${amount}` }]);
+
+    const message =
+        `💳 <b>Пополнение через крипту</b>\n\n` +
+        `💵 Курс: 1 USDT = ${USDT_TO_STARS} звёзд\n` +
+        `💡 Минимум: ${MIN_WITHDRAW} звёзд для вывода\n` +
+        `📉 Мин. сумма: ${CRYPTO_MIN_AMOUNT} USDT\n\n` +
+        `Выбери сумму:`;
+
+    const keyboard = CRYPTO_PACKAGES.map(amount => [{
+        text: `💵 ${amount} USDT → ${amount * USDT_TO_STARS} звёзд`,
+        callback_data: `crypto_buy_${amount}`,
+    }]);
+
+    // ✅ Кнопка "своя сумма"
+    keyboard.push([{ text: '✏️ Своя сумма', callback_data: 'crypto_custom' }]);
+
     await safeSend(chatId, message, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
 }
 
 async function sendCryptoInvoice(chatId, userId, usdtAmount) {
     if (!cryptoClient) return safeSend(chatId, '❌ Крипта недоступна.');
-    if (!CRYPTO_PACKAGES.includes(usdtAmount)) return safeSend(chatId, '❌ Неверная сумма.');
+
+    if (!Number.isFinite(usdtAmount) || usdtAmount < CRYPTO_MIN_AMOUNT || usdtAmount > CRYPTO_MAX_AMOUNT) {
+        return safeSend(chatId, `❌ Сумма должна быть от ${CRYPTO_MIN_AMOUNT} до ${CRYPTO_MAX_AMOUNT} USDT.`);
+    }
+
     const payload = `dep_${userId}_${usdtAmount}_${Date.now()}`;
+
     try {
-                const invoice = await cryptoClient.createInvoice({
+        const invoice = await cryptoClient.createInvoice({
             asset: 'USDT',
             amount: usdtAmount.toString(),
             description: `Пополнение на ${usdtAmount} USDT`,
@@ -1039,18 +1058,18 @@ async function sendCryptoInvoice(chatId, userId, usdtAmount) {
             paid_btn_url: `https://t.me/${BOT_USERNAME}`,
         });
 
-        // ✅ Отладка — покажет в логах, что вернул CryptoBot
+        // Отладка — покажет в логах, что вернул CryptoBot
         console.log('Invoice result:', JSON.stringify(invoice));
 
-        // ✅ Проверка: есть ли URL счёта
+        // Проверка: есть ли URL счёта
         if (!invoice || !invoice.botPayUrl) {
-            console.error('❌ Пустой bot_invoice_url:', invoice);
+            console.error('❌ Пустой botPayUrl:', invoice);
             return safeSend(chatId, '❌ Не удалось создать счёт. Попробуй позже.');
         }
 
         await safeSend(chatId,
             `💳 <b>Счёт на ${usdtAmount} USDT</b>\n\n` +
-            `⭐ Придёт ${usdtAmount * USDT_TO_STARS} звёзд.\n` +
+            `⭐ Придёт ${Math.round(usdtAmount * USDT_TO_STARS * 10000) / 10000} звёзд.\n` +
             `⏱ Счёт действует 1 час.\n\n` +
             `👇 Нажми кнопку ниже, чтобы оплатить:`,
             {
