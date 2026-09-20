@@ -1368,15 +1368,26 @@ async function sendCryptoInvoice(chatId, userId, usdtAmount) {
 
         await safeSend(chatId,
             `💳 <b>Счёт на ${usdtAmount} USDT</b>\n\n` +
-            `<a href="${invoice.bot_invoice_url}">Оплатить</a>\n\n` +
-            `⭐ Придёт ${usdtAmount * USDT_TO_STARS} звёзд.\n⏱ Счёт действует 1 час.`,
-            { parse_mode: 'HTML', disable_web_page_preview: true }
+            `⭐ Придёт ${usdtAmount * USDT_TO_STARS} звёзд.\n` +
+            `⏱ Счёт действует 1 час.\n\n` +
+            `👇 Нажми кнопку ниже, чтобы оплатить:`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: `💳 Оплатить ${usdtAmount} USDT`, url: invoice.bot_invoice_url }
+                    ]],
+                },
+            }
         );
-    } catch (e) {
-        console.error('sendCryptoInvoice:', e.message);
-        await safeSend(chatId, '❌ Ошибка. Попробуй позже.');
-    }
-}
+    } catch (e) {                                                    // ← ЭТО
+        console.error('sendCryptoInvoice:', e.message);              // ← ЭТО
+        await safeSend(chatId, '❌ Ошибка. Попробуй позже.');          // ← ЭТО
+    }                                                                // ← ЭТО
+}                                                                    // ← И ЭТО
+
+// ============ CALLBACK ============
+bot.on('callback_query', async (cb) => {
 
 // ============ CALLBACK ============
 bot.on('callback_query', async (cb) => {
