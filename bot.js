@@ -1288,7 +1288,7 @@ async function createTablesIfNotExist() {
             );
             CREATE TABLE IF NOT EXISTS tasks (
                 id SERIAL PRIMARY KEY, owner_id BIGINT NOT NULL, channel_username VARCHAR(255) NOT NULL,
-                reward NUMERIC(10,4) NOT NULL CHECK (reward >= 0.05 AND reward <= 10),
+                reward NUMERIC(10,4) NOT NULL CHECK (reward >= 0.25 AND reward <= 10),
                 total_budget NUMERIC(12,4) NOT NULL, completed_count INTEGER DEFAULT 0,
                 is_active BOOLEAN DEFAULT true, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (owner_id) REFERENCES users(id)
