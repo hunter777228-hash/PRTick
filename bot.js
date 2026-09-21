@@ -1227,6 +1227,14 @@ bot.on('callback_query', async (cb) => {
 });
 
 // ============ БД ============
+async function initDatabase() {                              ← ВЕРНУЛИ
+    try {
+        await pool.query('SELECT NOW()');
+        console.log('✅ БД подключена');
+        await createTablesIfNotExist();
+    } catch (e) { console.error('❌ Ошибка БД:', e); process.exit(1); }
+}
+
 async function createTablesIfNotExist() {
     const check = await pool.query(`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users');`);
     if (!check.rows[0].exists) {
