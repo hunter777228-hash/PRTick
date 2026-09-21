@@ -385,13 +385,14 @@ async function buildAdminPanelData() {
     const allTasks = await pool.query('SELECT COUNT(*) FROM tasks');
     const pending = await pool.query(`SELECT COUNT(*) FROM submissions WHERE status = 'pending'`);
     const pendingWithdraw = await pool.query(`SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'`);
+    const pendingExchange = await pool.query(`SELECT COUNT(*) FROM exchange_requests WHERE status = 'pending'`);
     const totalStars = await pool.query(`SELECT COALESCE(SUM(balance), 0) AS sum FROM users`);
     return {
         users: users.rows[0].count,
         activeTasks: activeTasks.rows[0].count,
         allTasks: allTasks.rows[0].count,
         pending: pending.rows[0].count,
-        pendingWithdraw: pendingWithdraw.rows[0].count,
+        pendingWithdraw: parseInt(pendingWithdraw.rows[0].count, 10) + parseInt(pendingExchange.rows[0].count, 10),
         totalStars: totalStars.rows[0].sum,
     };
 }
