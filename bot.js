@@ -298,7 +298,11 @@ const db = {
 // ============ КЛАВИАТУРЫ ============
 const mainKeyboard = {
     reply_markup: {
-        keyboard: [[{ text: '💰 Заработать' }, { text: '📢 Рекламировать' }], [{ text: '👤 Мой кабинет' }]],
+        keyboard: [
+            [{ text: '💰 Заработать' }, { text: '📢 Рекламировать' }],
+            [{ text: '💳 Пополнить' }, { text: '🔄 Обменять' }],
+            [{ text: '👤 Мой кабинет' }],
+        ],
         resize_keyboard: true,
     },
 };
