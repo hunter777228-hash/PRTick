@@ -1318,9 +1318,9 @@ async function createTablesIfNotExist() {
         const cc = await pool.query(`SELECT pg_get_constraintdef(c.oid) AS def FROM pg_constraint c JOIN pg_class t ON c.conrelid = t.oid WHERE t.relname = 'tasks' AND c.conname = 'tasks_reward_check'`);
         if (cc.rowCount > 0 && (cc.rows[0].def.includes('15') || cc.rows[0].def.includes('50'))) {
             await pool.query(`UPDATE tasks SET reward = 10 WHERE reward > 10`);
-            await pool.query(`UPDATE tasks SET reward = 0.05 WHERE reward < 0.05`);
+            await pool.query(`UPDATE tasks SET reward = 0.25 WHERE reward < 0.25`);
             await pool.query(`ALTER TABLE tasks DROP CONSTRAINT tasks_reward_check`);
-            await pool.query(`ALTER TABLE tasks ADD CONSTRAINT tasks_reward_check CHECK (reward >= 0.05 AND reward <= 10)`);
+            await pool.query(`ALTER TABLE tasks ADD CONSTRAINT tasks_reward_check CHECK (reward >= 0.25 AND reward <= 10)`);
             console.log('✅ Миграция CHECK');
         }
     } catch (e) { console.error('⚠️ Миграция:', e.message); }
