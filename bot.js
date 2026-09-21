@@ -953,70 +953,88 @@ async function handleAdminUsers(cb, offset, answer) {
 async function handleAdminWithdrawals(cb, offset, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
     if (!Number.isInteger(offset) || offset < 0) offset = 0;
+
     try {
-        const total = parseInt((await pool.query(`SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'`)).rows[0].count, 10);
-        if (total === 0) { await safeSend(cb.message.chat.id, '🎁 Нет заявок.'); return answer(); }
-        if (offset >= total) offset = Math.max(0, Math.floor((total - 1) / 5) * 5);
-        const rows = await pool.query(
-            `SELECT w.*, u.username as user_username, u.first_name FROM withdraw_requests w JOIN users u ON w.user_id = u.id
-             WHERE w.status = 'pending' ORDER BY w.created_at ASC LIMIT 5 OFFSET $1`,
-            [offset]
-        );
-        let msg = `🎁 <b>Заявки на вывод</b> (${offset + 1}–${offset + rows.rowCount} из ${total}):\n\n`;
-        const allButtons = [];
-        for (const w of rows.rows) {
-            msg += `#${w.id} | ${escapeHtml(w.first_name || '')} (@${escapeHtml(w.user_username || 'нет')})\n📮 ${escapeHtml(w.username)}\n🎁 ${w.gift}\n\n`;
-            allButtons.push([
-                { text: `✅ #${w.id}`, callback_data: `admin_accept_${w.id}` },
-                { text: `❌ #${w.id}`, callback_data: `admin_reject_${w.id}` },
-            ]);
+        const wTotal = parseInt((await pool.query(`SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'`)).rows[0].count, 10);
+        const eTotal = parseInt((await pool.query(`SELECT COUNT(*) FROM exchange_requests WHERE status = 'pending'`)).rows[0].count, 10);
+        const total = wTotal + eTotal;
+
+        if (total === 0) {
+            await safeSend(cb.message.chat.id, '🎁 Нет активных заявок.');
+            return answer();
         }
-        await safeSend(cb.message.chat.id, trimIfLong(msg), { parse_mode: 'HTML' });
+        if (offset >= total) offset = Math.max(0, Math.floor((total - 1) / 5) * 5);
+
+        const wRows = await pool.query(
+            `SELECT w.id, w.user_id, w.username, w.gift, w.created_at,
+                    u.username as user_username, u.first_name, 'withdraw' as type
+             FROM withdraw_requests w JOIN users u ON w.user_id = u.id
+             WHERE w.status = 'pending' ORDER BY w.created_at ASC`
+        );
+        const eRows = await pool.query(
+            `SELECT e.id, e.user_id, e.stars, e.gold, e.created_at,
+                    u.username as user_username, u.first_name, 'exchange' as type
+             FROM exchange_requests e JOIN users u ON e.user_id = u.id
+             WHERE e.status = 'pending' ORDER BY e.created_at ASC`
+        );
+
+        const all = [...wRows.rows, ...eRows.rows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+        const slice = all.slice(offset, offset + 5);
+
+        await safeSend(cb.message.chat.id,
+            `🎁 <b>Заявки</b> (${offset + 1}–${offset + slice.length} из ${total}):\n` +
+            `(подарки: ${wTotal}, обмен: ${eTotal})`,
+            { parse_mode: 'HTML' }
+        );
+
+        for (const item of slice) {
+            if (item.type === 'withdraw') {
+                await safeSend(cb.message.chat.id,
+                    `🎁 <b>Вывод #${item.id}</b>\n` +
+                    `👤 ${escapeHtml(item.first_name || '')} (@${escapeHtml(item.user_username || 'нет')})\n` +
+                    `📮 ${escapeHtml(item.username)}\n` +
+                    `🎁 ${item.gift}`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [[
+                                { text: `✅ #${item.id}`, callback_data: `admin_accept_${item.id}` },
+                                { text: `❌ #${item.id}`, callback_data: `admin_reject_${item.id}` },
+                            ]],
+                        },
+                    }
+                );
+            } else {
+                await safeSend(cb.message.chat.id,
+                    `🟡 <b>Обмен #${item.id}</b>\n` +
+                    `👤 ${escapeHtml(item.first_name || '')} (@${escapeHtml(item.user_username || 'нет')})\n` +
+                    `⭐ Списано: ${formatStars(item.stars)}\n` +
+                    `🟡 К начислению: ${formatStars(item.gold)} Голды`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [[
+                                { text: `✅ #${item.id}`, callback_data: `admin_exch_accept_${item.id}` },
+                                { text: `❌ #${item.id}`, callback_data: `admin_exch_reject_${item.id}` },
+                            ]],
+                        },
+                    }
+                );
+            }
+            await new Promise(r => setTimeout(r, 80));
+        }
+
         const nav = [];
         if (offset > 0) nav.push({ text: '⬅️', callback_data: `admin_withdrawals_${Math.max(0, offset - 5)}` });
         if (offset + 5 < total) nav.push({ text: '➡️', callback_data: `admin_withdrawals_${offset + 5}` });
         nav.push({ text: '🔙 В меню', callback_data: 'admin_refresh' });
-        await safeSend(cb.message.chat.id, '⚙️ Управление:', { reply_markup: { inline_keyboard: [...allButtons, nav] } });
+        if (nav.length) await safeSend(cb.message.chat.id, 'Навигация:', { reply_markup: { inline_keyboard: [nav] } });
+
         await answer();
-    } catch (e) { console.error('withdrawals:', e); await answer({ text: 'Ошибка' }); }
-}
-
-async function handleAdminBroadcast(cb, answer) {
-    if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
-    broadcastState.set(cb.from.id, true);
-    await safeSend(cb.message.chat.id, `📢 <b>Рассылка</b>\n\nОтправь текст, фото, видео или стикер.\n❌ Отмена — /cancel`, { parse_mode: 'HTML' });
-    await answer();
-}
-
-async function tryHandleBroadcast(msg) {
-    const userId = msg.from?.id;
-    if (userId !== ADMIN_ID) return false;
-    if (!broadcastState.get(userId)) return false;
-    if (broadcastRunning.has(userId)) { await safeSend(msg.chat.id, '⚠️ Рассылка уже идёт.'); return true; }
-    if (!msg.text && !msg.photo && !msg.video && !msg.sticker) {
-        await safeSend(msg.chat.id, '⚠️ Поддерживается: текст, фото, видео, стикер.');
-        return true;
+    } catch (e) {
+        console.error('handleAdminWithdrawals:', e);
+        await answer({ text: 'Ошибка' });
     }
-    broadcastState.delete(userId);
-    broadcastRunning.add(userId);
-    try {
-        const users = await pool.query('SELECT id FROM users');
-        let sent = 0, failed = 0, cancelled = false;
-        await safeSend(msg.chat.id, `📢 Рассылка для ${users.rowCount}...\n❌ Отмена — /cancel`);
-        for (const u of users.rows) {
-            if (!broadcastRunning.has(userId)) { cancelled = true; break; }
-            try {
-                if (msg.text) await bot.sendMessage(u.id, msg.text, { parse_mode: 'HTML' });
-                else if (msg.photo) await bot.sendPhoto(u.id, msg.photo[msg.photo.length - 1].file_id, { caption: msg.caption || '' });
-                else if (msg.video) await bot.sendVideo(u.id, msg.video.file_id, { caption: msg.caption || '' });
-                else if (msg.sticker) await bot.sendSticker(u.id, msg.sticker.file_id);
-                sent++;
-                await new Promise(r => setTimeout(r, 30));
-            } catch (e) { failed++; }
-        }
-        await safeSend(msg.chat.id, cancelled ? `⏹ Отменено. Отправлено: ${sent}` : `✅ Готово. Отправлено: ${sent}, ошибок: ${failed}`);
-    } finally { broadcastRunning.delete(userId); }
-    return true;
 }
 
 // ============ КРИПТО ============
