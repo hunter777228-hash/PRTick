@@ -1227,7 +1227,7 @@ bot.on('callback_query', async (cb) => {
 });
 
 // ============ БД ============
-async function initDatabase() {                              ← ВЕРНУЛИ
+async function initDatabase() {                              
     try {
         await pool.query('SELECT NOW()');
         console.log('✅ БД подключена');
