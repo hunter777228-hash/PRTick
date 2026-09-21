@@ -310,12 +310,10 @@ const mainKeyboard = {
 const cabinetKeyboard = {
     reply_markup: {
         inline_keyboard: [
-            [{ text: '💳 Пополнить (крипта)', callback_data: 'crypto_deposit' }],
             [{ text: '🎁 Вывести подарок', callback_data: 'withdraw_gift' }],
             [{ text: '👥 Реферальная система', callback_data: 'referral' }],
             [{ text: '📋 Мои задания', callback_data: 'my_tasks' }],
             [{ text: '📊 История транзакций', callback_data: 'transactions' }],
-            [{ text: '🔄 Обменять', callback_data: 'exchange_menu' }],
         ],
     },
 };
