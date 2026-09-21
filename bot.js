@@ -513,7 +513,7 @@ bot.on('message', async (msg) => {
     const wState = awaitingWithdraw.get(userId);
     if (wState) {
         if (!wState.promptSent) return;
-        if (['💰 Заработать', '📢 Рекламировать', '👤 Мой кабинет'].includes(text)) {
+        if (['💰 Заработать', '📢 Рекламировать', '👤 Мой кабинет', '💳 Пополнить', '🔄 Обменять'].includes(text)) {
             awaitingWithdraw.delete(userId);
         } else {
             return handleUsernameInput(msg, userId, wState.ts);
