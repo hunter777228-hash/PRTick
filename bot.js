@@ -1417,7 +1417,7 @@ async function handleExchangeGold(chatId, userId) {
     await safeSend(chatId,
         `🟡 <b>Обмен на Голду в Standoff 2</b>\n\n` +
         `Курс: <b>1⭐ = ${EXCHANGE_GOLD_RATE} Голды</b>\n` +
-        `Минимум: <b>${EXCHANGE_MIN_GOLD} Голды</b> (= ${EXCHANGE_MIN_STARS}⭐)\n\n` +
+        `Минимум: <b>${EXCHANGE_MIN_GOLD} Голды</b> (= ${EXCHANGE_MIN_STARS.toFixed(2)}⭐)\n\n` +
         `Введи, сколько звёзд хочешь обменять.\n` +
         `Пример: <code>${EXCHANGE_MIN_STARS}</code>\n\n` +
         `❌ Отмена — /cancel`,
