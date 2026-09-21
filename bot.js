@@ -1338,3 +1338,267 @@ async function start() {
 }
 
 start().catch(e => { console.error('❌ start:', e); process.exit(1); });
+
+
+// ============ ОБМЕН НА ГОЛДУ ============
+const EXCHANGE_GOLD_RATE = 2;                                    // 1⭐ = 2 Голды
+const EXCHANGE_MIN_GOLD = 20;                                    // минимум 20 Голды
+const EXCHANGE_MIN_STARS = EXCHANGE_MIN_GOLD / EXCHANGE_GOLD_RATE; // = 10⭐
+const awaitingExchangeAmount = new Map();
+
+async function handleExchangeMenu(chatId, userId) {
+    const user = await db.getUser(userId);
+    await safeSend(chatId,
+        `🔄 <b>Обмен звёзд</b>\n\n` +
+        `⭐ Твой баланс: <b>${formatStars(user.balance)}</b>\n\n` +
+        `Выбери, на что обменять:`,
+        {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🟡 Обменять на Голду', callback_data: 'exchange_gold' }],
+                ],
+            },
+        }
+    );
+}
+
+async function handleExchangeGold(chatId, userId) {
+    awaitingExchangeAmount.set(userId, Date.now());
+    await safeSend(chatId,
+        `🟡 <b>Обмен на Голду в Standoff 2</b>\n\n` +
+        `Курс: <b>1⭐ = ${EXCHANGE_GOLD_RATE} Голды</b>\n` +
+        `Минимум: <b>${EXCHANGE_MIN_GOLD} Голды</b> (= ${EXCHANGE_MIN_STARS}⭐)\n\n` +
+        `Введи, сколько звёзд хочешь обменять.\n` +
+        `Пример: <code>${EXCHANGE_MIN_STARS}</code>\n\n` +
+        `❌ Отмена — /cancel`,
+        { parse_mode: 'HTML' }
+    );
+}
+
+async function handleExchangeAmount(msg, userId, ts) {
+    const chatId = msg.chat.id;
+
+    if (Date.now() - ts > 10 * 60 * 1000) {
+        awaitingExchangeAmount.delete(userId);
+        return safeSend(chatId, '⌛ Время истекло. Попробуй снова.');
+    }
+
+    const text = (msg.text || '').trim();
+    const stars = parseFloat(text.replace(',', '.'));
+
+    if (Number.isNaN(stars) || stars <= 0) return safeSend(chatId, '❌ Введи положительное число.');
+    if (stars < EXCHANGE_MIN_STARS) return safeSend(chatId, `❌ Минимум ${EXCHANGE_MIN_STARS}⭐ (= ${EXCHANGE_MIN_GOLD} Голды).`);
+
+    awaitingExchangeAmount.delete(userId);
+    const goldToGet = Math.round(stars * EXCHANGE_GOLD_RATE * 100) / 100;
+
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+
+        const userRes = await client.query('SELECT * FROM users WHERE id = $1 FOR UPDATE', [userId]);
+        const user = userRes.rows[0];
+        if (!user) { await client.query('ROLLBACK'); return safeSend(chatId, 'Начните с /start'); }
+
+        if (parseFloat(user.balance) < stars) {
+            await client.query('ROLLBACK');
+            return safeSend(chatId, `❌ Недостаточно звёзд. У тебя ${formatStars(user.balance)}⭐.`);
+        }
+
+        const pending = await client.query(
+            `SELECT id FROM exchange_requests WHERE user_id = $1 AND status = 'pending' LIMIT 1`,
+            [userId]
+        );
+        if (pending.rowCount > 0) {
+            await client.query('ROLLBACK');
+            return safeSend(chatId, `⏳ Уже есть активная заявка #${pending.rows[0].id}.`);
+        }
+
+        const deduct = await client.query(
+            `UPDATE users SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING balance`,
+            [stars, userId]
+        );
+        if (deduct.rowCount === 0) { await client.query('ROLLBACK'); return safeSend(chatId, '❌ Недостаточно звёзд.'); }
+
+        const ins = await client.query(
+            `INSERT INTO exchange_requests (user_id, stars, gold, status) VALUES ($1, $2, $3, 'pending') RETURNING id`,
+            [userId, stars, goldToGet]
+        );
+        const reqId = ins.rows[0].id;
+
+        await client.query(
+            `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
+            [userId, -stars, 'exchange_hold', `Заявка на обмен #${reqId}`]
+        );
+        await client.query('COMMIT');
+
+        try {
+            await bot.sendMessage(ADMIN_ID,
+                `🔄 <b>Заявка на обмен #${reqId}</b>\n\n` +
+                `👤 ${escapeHtml(user.first_name || '')} (@${escapeHtml(user.username || 'нет')})\n` +
+                `🆔 <code>${userId}</code>\n` +
+                `⭐ Списано: ${formatStars(stars)}\n` +
+                `🟡 К начислению: ${formatStars(goldToGet)} Голды\n` +
+                `💳 Остаток: ${formatStars(deduct.rows[0].balance)}⭐`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: {
+                        inline_keyboard: [[
+                            { text: '✅ Принять', callback_data: `admin_exch_accept_${reqId}` },
+                            { text: '❌ Отклонить', callback_data: `admin_exch_reject_${reqId}` },
+                        ]],
+                    },
+                }
+            );
+        } catch (e) { console.error('notify admin:', e.message); }
+
+        await safeSend(chatId,
+            `✅ Заявка #${reqId} создана!\n\n` +
+            `⭐ Списано: ${formatStars(stars)}\n` +
+            `🟡 Получишь: ${formatStars(goldToGet)} Голды\n` +
+            `⏳ Ожидай начисления.`
+        );
+    } catch (e) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        console.error('exchange amount:', e);
+        await safeSend(chatId, '❌ Ошибка. Попробуй позже.');
+    } finally { if (client) client.release(); }
+}
+
+async function handleAdminExchAccept(cb, reqId, answer) {
+    if (cb.from.id !== ADMIN_ID) return answer({ text: 'Не твоя.' });
+    if (!Number.isInteger(reqId) || reqId <= 0) return answer({ text: 'Неверный ID.' });
+
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const upd = await client.query(
+            `UPDATE exchange_requests SET status = 'accepted', processed_at = NOW()
+             WHERE id = $1 AND status = 'pending' RETURNING *`,
+            [reqId]
+        );
+        if (upd.rowCount === 0) { await client.query('ROLLBACK'); return answer({ text: 'Уже обработана.' }); }
+        const req = upd.rows[0];
+        await client.query('COMMIT');
+
+        try {
+            await bot.sendMessage(req.user_id,
+                `🎉 Заявка #${reqId} одобрена!\n\n` +
+                `🟡 Начислено: ${formatStars(req.gold)} Голды`
+            );
+        } catch (e) {}
+
+        try {
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+                chat_id: cb.message.chat.id, message_id: cb.message.message_id,
+            });
+        } catch (e) {}
+
+        await answer({ text: 'Принято!' });
+    } catch (e) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        console.error('exch accept:', e);
+        await answer({ text: 'Ошибка' });
+    } finally { if (client) client.release(); }
+}
+
+async function handleAdminExchReject(cb, reqId, answer) {
+    if (cb.from.id !== ADMIN_ID) return answer({ text: 'Не твоя.' });
+    if (!Number.isInteger(reqId) || reqId <= 0) return answer({ text: 'Неверный ID.' });
+
+    let client;
+    try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const upd = await client.query(
+            `UPDATE exchange_requests SET status = 'rejected', processed_at = NOW()
+             WHERE id = $1 AND status = 'pending' RETURNING *`,
+            [reqId]
+        );
+        if (upd.rowCount === 0) { await client.query('ROLLBACK'); return answer({ text: 'Уже обработана.' }); }
+        const req = upd.rows[0];
+
+        await client.query('UPDATE users SET balance = balance + $1 WHERE id = $2', [req.stars, req.user_id]);
+        await client.query(
+            `INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`,
+            [req.user_id, req.stars, 'exchange_refund', `Возврат #${reqId}`]
+        );
+        await client.query('COMMIT');
+
+        try {
+            await bot.sendMessage(req.user_id,
+                `❌ Заявка #${reqId} отклонена.\n⭐ ${formatStars(req.stars)} звёзд возвращены.`
+            );
+        } catch (e) {}
+
+        try {
+            await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+                chat_id: cb.message.chat.id, message_id: cb.message.message_id,
+            });
+        } catch (e) {}
+
+        await answer({ text: 'Отклонено.' });
+    } catch (e) {
+        if (client) await client.query('ROLLBACK').catch(() => {});
+        console.error('exch reject:', e);
+        await answer({ text: 'Ошибка' });
+    } finally { if (client) client.release(); }
+}
+
+// Обработчик callback обмена
+bot.on('callback_query', async (cb) => {
+    const action = cb.data;
+    if (!action || typeof action !== 'string') return;
+    const userId = cb.from.id;
+    const chatId = cb.message?.chat?.id;
+    if (!chatId) return;
+
+    if (action === 'exchange_menu') {
+        await handleExchangeMenu(chatId, userId);
+        try { await bot.answerCallbackQuery(cb.id); } catch (e) {}
+    } else if (action === 'exchange_gold') {
+        await handleExchangeGold(chatId, userId);
+        try { await bot.answerCallbackQuery(cb.id); } catch (e) {}
+    } else if (action.startsWith('admin_exch_accept_')) {
+        const reqId = parseInt(action.slice(18), 10);
+        let answered = false;
+        const answer = async (opts = {}) => {
+            if (answered) return;
+            answered = true;
+            try { await bot.answerCallbackQuery(cb.id, opts); } catch (e) {}
+        };
+        await handleAdminExchAccept(cb, reqId, answer);
+    } else if (action.startsWith('admin_exch_reject_')) {
+        const reqId = parseInt(action.slice(18), 10);
+        let answered = false;
+        const answer = async (opts = {}) => {
+            if (answered) return;
+            answered = true;
+            try { await bot.answerCallbackQuery(cb.id, opts); } catch (e) {}
+        };
+        await handleAdminExchReject(cb, reqId, answer);
+    }
+});
+
+// Обработчик ввода суммы обмена
+bot.on('message', async (msg) => {
+    const userId = msg.from?.id;
+    if (!userId) return;
+    if (msg.chat.type !== 'private') return;
+
+    if (awaitingExchangeAmount.has(userId)) {
+        const ts = awaitingExchangeAmount.get(userId);
+        const text = (msg.text || '').trim();
+
+        if (text.startsWith('/')) {
+            awaitingExchangeAmount.delete(userId);
+            if (text === '/cancel') await safeSend(msg.chat.id, '❌ Обмен отменён.');
+            return;
+        }
+
+        await handleExchangeAmount(msg, userId, ts);
+    }
+});
