@@ -1037,6 +1037,43 @@ async function handleAdminWithdrawals(cb, offset, answer) {
         await answer({ text: 'Ошибка' });
     }
 }
+async function handleAdminBroadcast(cb, answer) {
+    if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
+    broadcastState.set(cb.from.id, true);
+    await safeSend(cb.message.chat.id, `📢 <b>Рассылка</b>\n\nОтправь текст, фото, видео или стикер.\n❌ Отмена — /cancel`, { parse_mode: 'HTML' });
+    await answer();
+}
+
+async function tryHandleBroadcast(msg) {
+    const userId = msg.from?.id;
+    if (userId !== ADMIN_ID) return false;
+    if (!broadcastState.get(userId)) return false;
+    if (broadcastRunning.has(userId)) { await safeSend(msg.chat.id, '⚠️ Рассылка уже идёт.'); return true; }
+    if (!msg.text && !msg.photo && !msg.video && !msg.sticker) {
+        await safeSend(msg.chat.id, '⚠️ Поддерживается: текст, фото, видео, стикер.');
+        return true;
+    }
+    broadcastState.delete(userId);
+    broadcastRunning.add(userId);
+    try {
+        const users = await pool.query('SELECT id FROM users');
+        let sent = 0, failed = 0, cancelled = false;
+        await safeSend(msg.chat.id, `📢 Рассылка для ${users.rowCount}...\n❌ Отмена — /cancel`);
+        for (const u of users.rows) {
+            if (!broadcastRunning.has(userId)) { cancelled = true; break; }
+            try {
+                if (msg.text) await bot.sendMessage(u.id, msg.text, { parse_mode: 'HTML' });
+                else if (msg.photo) await bot.sendPhoto(u.id, msg.photo[msg.photo.length - 1].file_id, { caption: msg.caption || '' });
+                else if (msg.video) await bot.sendVideo(u.id, msg.video.file_id, { caption: msg.caption || '' });
+                else if (msg.sticker) await bot.sendSticker(u.id, msg.sticker.file_id);
+                sent++;
+                await new Promise(r => setTimeout(r, 30));
+            } catch (e) { failed++; }
+        }
+        await safeSend(msg.chat.id, cancelled ? `⏹ Отменено. Отправлено: ${sent}` : `✅ Готово. Отправлено: ${sent}, ошибок: ${failed}`);
+    } finally { broadcastRunning.delete(userId); }
+    return true;
+}
 
 // ============ КРИПТО ============
 async function handleCryptoDeposit(chatId, userId) {
