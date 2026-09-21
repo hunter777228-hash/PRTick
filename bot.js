@@ -1390,9 +1390,9 @@ start().catch(e => { console.error('❌ start:', e); process.exit(1); });
 
 
 // ============ ОБМЕН НА ГОЛДУ ============
-const EXCHANGE_GOLD_RATE = 2;                                    // 1⭐ = 2 Голды
+const EXCHANGE_GOLD_RATE = 1.5;                                    // 1⭐ = 1.5 Голды
 const EXCHANGE_MIN_GOLD = 20;                                    // минимум 20 Голды
-const EXCHANGE_MIN_STARS = EXCHANGE_MIN_GOLD / EXCHANGE_GOLD_RATE; // = 10⭐
+const EXCHANGE_MIN_STARS = EXCHANGE_MIN_GOLD / EXCHANGE_GOLD_RATE; // = 13.33⭐
 const awaitingExchangeAmount = new Map();
 
 async function handleExchangeMenu(chatId, userId) {
