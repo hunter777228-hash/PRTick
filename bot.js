@@ -356,6 +356,7 @@ bot.onText(/^\/cancel(?:@\w+)?$/, async (msg) => {
     if (awaitingWithdraw.has(userId)) { awaitingWithdraw.delete(userId); cancelled = true; }
     if (awaitingScreenshot.has(userId)) { awaitingScreenshot.delete(userId); cancelled = true; }
     if (awaitingCryptoAmount.has(userId)) { awaitingCryptoAmount.delete(userId); cancelled = true; }
+    if (awaitingExchangeAmount.has(userId)) { awaitingExchangeAmount.delete(userId); cancelled = true; }
     if (broadcastState.has(userId)) { broadcastState.delete(userId); cancelled = true; }
     if (broadcastRunning.has(userId)) { broadcastRunning.delete(userId); cancelled = true; }
 
