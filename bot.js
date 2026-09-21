@@ -1207,14 +1207,6 @@ bot.on('callback_query', async (cb) => {
 });
 
 // ============ БД ============
-async function initDatabase() {
-    try {
-        await pool.query('SELECT NOW()');
-        console.log('✅ БД подключена');
-        await createTablesIfNotExist();
-    } catch (e) { console.error('❌ Ошибка БД:', e); process.exit(1); }
-}
-
 async function createTablesIfNotExist() {
     const check = await pool.query(`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users');`);
     if (!check.rows[0].exists) {
@@ -1272,6 +1264,7 @@ async function createTablesIfNotExist() {
             processed_at TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_withdraw_requests_status ON withdraw_requests(status);
+
         CREATE TABLE IF NOT EXISTS submissions (
             id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -1279,9 +1272,21 @@ async function createTablesIfNotExist() {
             reject_reason TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, processed_at TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_submissions_status ON submissions(status);
+
         CREATE TABLE IF NOT EXISTS processed_payments (
             payload TEXT PRIMARY KEY, processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS exchange_requests (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            stars NUMERIC(12,4) NOT NULL,
+            gold NUMERIC(12,4) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_exchange_requests_status ON exchange_requests(status);
     `);
     console.log('✅ Доп. таблицы готовы');
 }
