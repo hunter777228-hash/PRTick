@@ -126,8 +126,8 @@ app.post('/crypto/webhook', express.raw({ type: 'application/json' }), async (re
 app.listen(PORT, () => console.log(`Server on port ${PORT}`));
 
 // ============ КОНСТАНТЫ ============
-const REFERRAL_BONUS = 0.05;
-const MIN_TASK_REWARD = 0.05;
+const REFERRAL_BONUS = 1;
+const MIN_TASK_REWARD = 0.25;
 const MAX_TASK_REWARD = 10;
 const GIFT_COST = 15;
 const MIN_WITHDRAW = 15;
