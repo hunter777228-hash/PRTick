@@ -528,6 +528,8 @@ bot.on('message', async (msg) => {
             case '💰 Заработать': return handleEarnCommand(msg.chat.id, userId, 0);
             case '📢 Рекламировать': return handleAdvertiseCommand(msg.chat.id, userId);
             case '👤 Мой кабинет': return handleCabinetCommand(msg.chat.id, user);
+            case '💳 Пополнить': return handleCryptoDeposit(msg.chat.id, userId);
+            case '🔄 Обменять': return handleExchangeMenu(msg.chat.id, userId);
         }
 
         if (text.startsWith('создать ')) return handleCreateTask(msg);
