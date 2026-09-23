@@ -1403,6 +1403,15 @@ const EXCHANGE_MIN_GOLD = 20;                                    // миниму
 const EXCHANGE_MIN_STARS = Math.ceil((EXCHANGE_MIN_GOLD / EXCHANGE_GOLD_RATE) * 100) / 100;
 const awaitingExchangeAmount = new Map();
 
+async function getOperatorContact(role) {
+    try {
+        const r = await pool.query('SELECT contact FROM operators WHERE role = $1', [role]);
+        return r.rowCount > 0 ? r.rows[0].contact : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 async function handleExchangeMenu(chatId, userId) {
     const user = await db.getUser(userId);
     await safeSend(chatId,
