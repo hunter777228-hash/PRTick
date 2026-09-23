@@ -494,6 +494,18 @@ bot.on('message', async (msg) => {
     const text = (msg.text || '').trim();
     if (!text || text.startsWith('/')) return;
 
+        // ===== Ввод @username оператора =====
+    if (awaitingRoleContact.has(userId)) {
+        const role = awaitingRoleContact.get(userId);
+        const t = (msg.text || '').trim();
+        if (t.startsWith('/')) {
+            awaitingRoleContact.delete(userId);
+            if (t === '/cancel') await safeSend(msg.chat.id, '❌ Назначение отменено.');
+            return;
+        }
+        return handleRoleContactInput(msg, userId, role);
+    }
+
     // ===== Ввод своей суммы для крипты =====
     if (awaitingCryptoAmount.has(userId)) {
         if (Date.now() - awaitingCryptoAmount.get(userId) > 5 * 60 * 1000) {
