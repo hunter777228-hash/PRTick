@@ -1244,6 +1244,12 @@ bot.on('callback_query', async (cb) => {
             await handleAdminUsers(cb, parseInt(action.slice(12), 10) || 0, answer);
         } else if (action.startsWith('admin_withdrawals_')) {
             await handleAdminWithdrawals(cb, parseInt(action.slice(18), 10) || 0, answer);
+         } else if (action === 'admin_roles') {
+            await handleAdminRoles(cb, answer);
+        } else if (action === 'admin_role_set_gifts') {
+            await handleAdminRoleSet(cb, 'gifts', answer);
+        } else if (action === 'admin_role_set_gold') {
+            await handleAdminRoleSet(cb, 'gold', answer);
         } else if (action === 'admin_broadcast') {
             await handleAdminBroadcast(cb, answer);
         } else if (action === 'admin_refresh') {
