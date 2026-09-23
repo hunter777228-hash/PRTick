@@ -1296,6 +1296,45 @@ bot.on('callback_query', async (cb) => {
 });
 
 // ============ БД ============
+async function handleReferral(chatId, userId) {
+    const user = await db.getUser(userId);
+    const link = `https://t.me/${BOT_USERNAME}?start=_${user.id}`;
+    await safeSend(chatId,
+        `👥 Реферальная система\n\n` +
+        `🔗 <code>${link}</code>\n\n` +
+        `📊 Приглашено: <b>${user.referral_count}</b>\n` +
+        `⭐ Заработано: <b>${formatStars(user.referral_count * REFERRAL_BONUS)}</b>\n\n` +
+        `💡 ${formatStars(REFERRAL_BONUS)} звёзд за друга`,
+        { parse_mode: 'HTML' }
+    );
+}
+
+async function handleMyTasks(chatId, userId) {
+    const tasks = await db.getUserTasks(userId);
+    if (!tasks.length) return safeSend(chatId, '📋 Нет заданий.');
+    let message = '📋 Ваши задания:\n\n';
+    tasks.slice(0, 15).forEach((t, i) => {
+        const reward = parseFloat(t.reward);
+        const budget = parseFloat(t.total_budget);
+        const maxC = Math.floor(budget / reward);
+        message += `${i + 1}. @${t.channel_username}\n${t.is_active ? '🟢' : '🔴'} ⭐${formatStars(reward)} | ${t.completed_count}/${maxC}\n\n`;
+    });
+    if (tasks.length > 15) message += `\n... и ещё ${tasks.length - 15}\n`;
+    await safeSend(chatId, trimIfLong(message));
+}
+
+async function handleTransactions(chatId, userId) {
+    const r = await pool.query(`SELECT * FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10`, [userId]);
+    if (!r.rows.length) return safeSend(chatId, '📊 Пусто.');
+    let message = '📊 Последние 10:\n\n';
+    r.rows.forEach(tx => {
+        const date = new Date(tx.created_at).toLocaleDateString('ru-RU');
+        const amt = tx.amount > 0 ? `+${formatStars(tx.amount)}` : formatStars(tx.amount);
+        message += `${tx.amount > 0 ? '💚' : '🔴'} ${amt}⭐ | ${date}\n${tx.description}\n\n`;
+    });
+    await safeSend(chatId, trimIfLong(message));
+}
+
 async function initDatabase() {                              
     try {
         await pool.query('SELECT NOW()');
