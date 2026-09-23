@@ -381,6 +381,7 @@ bot.onText(/^\/addbalance(?:@\w+)?\s+@?(\w+)\s+([\d.,]+)$/, async (msg, match) =
         await safeSend(r.rows[0].id, `🎁 Вам начислено ${formatStars(amountR)}⭐`);
     } catch (e) { console.error('/addbalance:', e); await safeSend(msg.chat.id, '❌ Ошибка.'); }
 });
+
 // ============ АДМИН-ПАНЕЛЬ ============
 async function buildAdminPanelData() {
     const users = await pool.query('SELECT COUNT(*) FROM users');
@@ -419,6 +420,9 @@ function buildAdminPanelKeyboard(d) {
             [
                 { text: `📋 Задания`, callback_data: 'admin_tasks_0' },
                 { text: `👥 Юзеры`, callback_data: 'admin_users_0' },
+            ],
+            [
+                { text: `👑 Роли`, callback_data: 'admin_roles' },
             ],
             [{ text: `📢 Рассылка`, callback_data: 'admin_broadcast' }],
         ],
