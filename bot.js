@@ -1533,6 +1533,62 @@ async function handleExchangeAmount(msg, userId, ts) {
     } finally { if (client) client.release(); }
 }
 
+async function handleAdminRoles(cb, answer) {
+    if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
+    const gifts = await pool.query(`SELECT contact FROM operators WHERE role = 'gifts'`);
+    const gold = await pool.query(`SELECT contact FROM operators WHERE role = 'gold'`);
+    const giftsText = gifts.rowCount > 0 ? gifts.rows[0].contact : 'не назначен';
+    const goldText = gold.rowCount > 0 ? gold.rows[0].contact : 'не назначен';
+
+    await safeSend(cb.message.chat.id,
+        `👑 <b>Роли операторов</b>\n\n` +
+        `🎁 Подарки: <b>${escapeHtml(giftsText)}</b>\n` +
+        `🟡 Голда: <b>${escapeHtml(goldText)}</b>\n\n` +
+        `Кому писать — назначай:`,
+        {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '🎁 Назначить (Подарки)', callback_data: 'admin_role_set_gifts' }],
+                    [{ text: '🟡 Назначить (Голда)', callback_data: 'admin_role_set_gold' }],
+                    [{ text: '🔙 В меню', callback_data: 'admin_refresh' }],
+                ],
+            },
+        }
+    );
+    await answer();
+}
+
+async function handleAdminRoleSet(cb, role, answer) {
+    if (cb.from.id !== ADMIN_ID) return answer({ text: 'Только для админа.' });
+    awaitingRoleContact.set(cb.from.id, role);
+    await safeSend(cb.message.chat.id,
+        `👑 Назначение роли <b>${role === 'gifts' ? '🎁 Подарки' : '🟡 Голда'}</b>\n\n` +
+        `Отправь @username оператора (начиная с @).\n` +
+        `❌ Отмена — /cancel`,
+        { parse_mode: 'HTML' }
+    );
+    await answer();
+}
+
+async function handleRoleContactInput(msg, userId, role) {
+    const chatId = msg.chat.id;
+    const text = (msg.text || '').trim();
+    if (!USERNAME_REGEX.test(text)) {
+        return safeSend(chatId, '❌ Некорректный @username (5–32, латиница/цифры/_).');
+    }
+    awaitingRoleContact.delete(userId);
+    await pool.query(
+        `INSERT INTO operators (role, contact, added_by) VALUES ($1, $2, $3)
+         ON CONFLICT (role) DO UPDATE SET contact = EXCLUDED.contact, added_by = EXCLUDED.added_by`,
+        [role, text, userId]
+    );
+    await safeSend(chatId,
+        `✅ Роль <b>${role === 'gifts' ? '🎁 Подарки' : '🟡 Голда'}</b> назначена: <b>${escapeHtml(text)}</b>`,
+        { parse_mode: 'HTML' }
+    );
+}
+
 async function handleAdminExchAccept(cb, reqId, answer) {
     if (cb.from.id !== ADMIN_ID) return answer({ text: 'Не твоя.' });
     if (!Number.isInteger(reqId) || reqId <= 0) return answer({ text: 'Неверный ID.' });
