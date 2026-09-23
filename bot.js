@@ -1546,11 +1546,12 @@ async function handleExchangeAmount(msg, userId, ts) {
             );
         } catch (e) { console.error('notify admin:', e.message); }
 
+        const goldOp = (await getOperatorContact('gold')) || '@Sadaw4ik';
         await safeSend(chatId,
             `✅ Заявка #${reqId} создана!\n\n` +
             `⭐ Списано: ${formatStars(stars)}\n` +
-            `🟡 Получишь: ${formatStars(goldToGet)} Голды\n` +
-            `⏳ Ожидай начисления.`
+            `🟡 Получишь: ${formatStars(goldToGet)} Голды\n\n` +
+            `🕐 Ожидай получения. С вами свяжется ${goldOp} и передаст голду.`
         );
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(() => {});
