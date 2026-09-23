@@ -1357,6 +1357,13 @@ async function createTablesIfNotExist() {
             processed_at TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_exchange_requests_status ON exchange_requests(status);
+        
+        CREATE TABLE IF NOT EXISTS operators (
+            role VARCHAR(20) PRIMARY KEY,
+            contact VARCHAR(64) NOT NULL,
+            added_by BIGINT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     `);
     console.log('✅ Доп. таблицы готовы');
 }
