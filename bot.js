@@ -150,6 +150,7 @@ const awaitingScreenshot = new Map();
 const awaitingCryptoAmount = new Map();
 const broadcastState = new Map();
 const broadcastRunning = new Set();
+const awaitingRoleContact = new Map();
 
 // ============ ХЕЛПЕРЫ ============
 function escapeHtml(text) {
