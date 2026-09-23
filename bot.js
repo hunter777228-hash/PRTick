@@ -715,7 +715,7 @@ async function handleUsernameInput(msg, userId, ts) {
         const ins = await client.query(`INSERT INTO withdraw_requests (user_id, username, gift) VALUES ($1, $2, $3) RETURNING id`, [userId, text, 'Мишка (15⭐)']);
         const reqId = ins.rows[0].id;
         await client.query(`INSERT INTO transactions (user_id, amount, type, description) VALUES ($1, $2, $3, $4)`, [userId, -GIFT_COST, 'withdraw_hold', `Заявка #${reqId}`]);
-        await client.query('COMMIT');
+               await client.query('COMMIT');
 
         try {
             await bot.sendMessage(ADMIN_ID,
@@ -727,7 +727,11 @@ async function handleUsernameInput(msg, userId, ts) {
             );
         } catch (e) { console.error('notify admin:', e.message); }
 
-        await safeSend(chatId, `✅ Заявка #${reqId} создана. Списано ${GIFT_COST}⭐.`);
+        const giftOp = (await getOperatorContact('gifts')) || '@Sadaw4ik';
+        await safeSend(chatId,
+            `✅ Заявка #${reqId} создана. Списано ${GIFT_COST}⭐.\n\n` +
+            `🕐 Ожидай получения. С вами свяжется ${giftOp} и передаст подарок.`
+        );
     } catch (e) {
         if (client) await client.query('ROLLBACK').catch(() => {});
         console.error('withdraw create:', e);
